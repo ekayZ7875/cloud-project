@@ -1,0 +1,19 @@
+{
+  "name": "backend",
+  "module": "index.js",
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "argon2": "^0.43.0",
+    "aws-sdk": "^2.1692.0",
+    "express": "^5.1.0",
+    "logger": "^0.0.1",
+    "nodemon": "^3.1.10",
+    "winston": "^3.17.0"
+  }
+}
