@@ -1,4 +1,4 @@
-const errorHandler = (
+export const errorHandler = (
   status = 500,
   title = "Internal Server Error",
   detail = "Error in processing request! Please try again later."
@@ -13,4 +13,4 @@ const errorHandler = (
   };
 };
 
-export default errorHandler;
+
