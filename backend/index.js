@@ -6,6 +6,7 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import authRoutes from "./routes/auth.routes.js";
 import fileRoutes from "./routes/file.routes.js"
+import folderRoutes from './routes/folder.routes.js'
 
 dotenv.config();
 
@@ -30,6 +31,7 @@ app.use(
 app.get("/", (req, res) => res.status(200).send("OK"));
 app.use("/api/auth", authRoutes);
 app.use('/api/files',fileRoutes)
+app.use('/api/folder',folderRoutes)
 
 app.use((req, res, next) => {
   logger.warn(`Unhandled route: ${req.method} ${req.url}`);
