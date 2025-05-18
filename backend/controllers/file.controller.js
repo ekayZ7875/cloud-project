@@ -473,3 +473,42 @@ export const getAllFoldersForUser = async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 };
+
+export const getTrashedFiles = async (req, res) => {
+  const user = req.user
+
+  const userId = user.userId
+
+  if (!userId) {
+    return res.status(400).json({
+      success: false,
+      message: "User ID is required.",
+    });
+  }
+
+  const params = {
+    TableName: "files",
+    KeyConditionExpression: "userId = :uid",
+    FilterExpression: "is_deleted = :isDeleted",
+    ExpressionAttributeValues: {
+      ":uid": userId,
+      ":isDeleted": true,
+    },
+  };
+
+  try {
+    const result = await dynamoDb.query(params).promise();
+
+    return res.status(200).json({
+      success: true,
+      message: "Trashed files fetched successfully.",
+      data: result.Items || [],
+    });
+  } catch (err) {
+    console.error("Error fetching trash files:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch trash files.",
+    });
+  }
+};

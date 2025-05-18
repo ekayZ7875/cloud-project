@@ -4,7 +4,8 @@ import {
   uploadFile,
   getUserFiles,
   softDeleteFile,
-  toggleStarFile
+  toggleStarFile,
+  getTrashedFiles
 } from "../controllers/file.controller.js";
 import authMiddleware from "../middlewares/auth.middlewares.js";
 
@@ -15,5 +16,6 @@ router.post("/upload-file", authMiddleware, upload.single("file"), uploadFile);
 router.get("/get-files", authMiddleware, getUserFiles);
 router.post("/delete-files", authMiddleware, softDeleteFile);
 router.post('/star-file',authMiddleware,toggleStarFile)
+router.get('/get-trashed-files',authMiddleware,getTrashedFiles)
 
 export default router;
