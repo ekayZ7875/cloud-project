@@ -9,6 +9,7 @@ import {
   getTrashedFiles,
   getStarredFiles,
   getRecentUploads,
+  downloadFile
 } from "../controllers/file.controller.js";
 import authMiddleware from "../middlewares/auth.middlewares.js";
 
@@ -23,5 +24,6 @@ router.post("/star-file", authMiddleware, toggleStarFile);
 router.get("/get-starred-files", authMiddleware, getStarredFiles);
 router.get("/get-trashed-files", authMiddleware, getTrashedFiles);
 router.get("/get-recent-files", authMiddleware, getRecentUploads);
+router.post("/download-file", authMiddleware, downloadFile);
 
 export default router;

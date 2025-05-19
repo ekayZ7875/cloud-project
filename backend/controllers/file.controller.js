@@ -622,3 +622,47 @@ export const getRecentUploads = async (req, res) => {
     });
   }
 };
+
+export const downloadFile = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { fileId } = req.query;
+
+    const result = await dynamoDb
+      .get({
+        TableName: FILES_TABLE,
+        Key: { userId, fileId },
+      })
+      .promise();
+
+    if (!result.Item) {
+      return res
+        .status(404)
+        .send(errorHandler(404, "Not Found", "File not found"));
+    }
+
+    const fileKey = `${userId}/${fileId}-${result.Item.fileName}`;
+
+    const params = {
+      Bucket: BUCKET_NAME,
+      Key: fileKey,
+      Expires: 60 * 5,
+      ResponseContentDisposition: `attachment; filename="${result.Item.fileName}"`,
+    };
+
+    const url = s3.getSignedUrl("getObject", params);
+
+    return res.status(200).json({
+      success: true,
+      downloadUrl: url,
+      fileName: result.Item.fileName,
+    });
+  } catch (error) {
+    console.error("Download File Error:", error);
+    return res
+      .status(500)
+      .send(
+        errorHandler(500, "Download Failed", "Server error during download")
+      );
+  }
+};
