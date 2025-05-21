@@ -5,15 +5,15 @@ import logger from "./libs/logger.js";
 import bodyParser from "body-parser";
 import cors from "cors";
 import authRoutes from "./routes/auth.routes.js";
-import fileRoutes from "./routes/file.routes.js"
-import folderRoutes from './routes/folder.routes.js'
+import fileRoutes from "./routes/file.routes.js";
+import folderRoutes from "./routes/folder.routes.js";
 
 dotenv.config();
 
 const app = express();
 
 app.use(express.json());
-app.use(express.urlencoded({extended:true}))
+app.use(express.urlencoded({ extended: true }));
 app.use(bodyParser.urlencoded({ extended: true })); // for form-data payloads
 app.use(bodyParser.json()); // For JSON payloads
 app.use(morgan("dev"));
@@ -30,8 +30,8 @@ app.use(
 
 app.get("/", (req, res) => res.status(200).send("OK"));
 app.use("/api/auth", authRoutes);
-app.use('/api/files',fileRoutes)
-app.use('/api/folder',folderRoutes)
+app.use("/api/files", fileRoutes);
+app.use("/api/folder", folderRoutes);
 
 app.use((req, res, next) => {
   logger.warn(`Unhandled route: ${req.method} ${req.url}`);

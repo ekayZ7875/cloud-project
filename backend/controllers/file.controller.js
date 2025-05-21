@@ -69,6 +69,8 @@ export const uploadFile = async (req, res) => {
           fileType: file.mimetype,
           fileSize,
           s3Url,
+          isStarred: false,
+          isDeleted: false,
           uploadedAt: new Date().toISOString(),
         },
       })
@@ -126,6 +128,43 @@ export const getUserFiles = async (req, res) => {
   }
 };
 
+export const getSingleFile = async (req, res) => {
+  try {
+    const user = req.user;
+    const { fileId } = req.query;
+
+    const userId = user.userId;
+    if (!fileId) {
+      return res
+        .status(400)
+        .send(errorHandler(400, "Invalid Request", "fileId is required"));
+    }
+
+    const result = await dynamoDb
+      .get({
+        TableName: FILES_TABLE,
+        Key: { userId, fileId },
+      })
+      .promise();
+
+    if (!result.Item) {
+      return res
+        .status(404)
+        .send(errorHandler(404, "Not Found", "File not found"));
+    }
+
+    return res.status(200).send({
+      message: "File fetched successfully",
+      file: result.Item,
+    });
+  } catch (error) {
+    console.error("Fetch Single File Error:", error);
+    return res
+      .status(500)
+      .send(errorHandler(500, "Internal Error", "Failed to fetch file"));
+  }
+};
+
 export const softDeleteFile = async (req, res) => {
   try {
     const user = req.user;
@@ -151,7 +190,7 @@ export const softDeleteFile = async (req, res) => {
       .update({
         TableName: FILES_TABLE,
         Key: { userId, fileId },
-        UpdateExpression: "SET is_deleted = :val, updatedAt = :updatedAt",
+        UpdateExpression: "SET isDeleted = :val, updatedAt = :updatedAt",
         ExpressionAttributeValues: {
           ":val": true,
           ":updatedAt": new Date().toISOString(),
@@ -185,6 +224,44 @@ export const softDeleteFile = async (req, res) => {
     return res
       .status(500)
       .send(errorHandler(500, "Server Error", "Failed to delete file"));
+  }
+};
+export const getTrashedFiles = async (req, res) => {
+  const user = req.user;
+
+  const userId = user.userId;
+
+  if (!userId) {
+    return res.status(400).json({
+      success: false,
+      message: "User ID is required.",
+    });
+  }
+
+  const params = {
+    TableName: "files",
+    KeyConditionExpression: "userId = :uid",
+    FilterExpression: "is_deleted = :isDeleted",
+    ExpressionAttributeValues: {
+      ":uid": userId,
+      ":isDeleted": true,
+    },
+  };
+
+  try {
+    const result = await dynamoDb.query(params).promise();
+
+    return res.status(200).json({
+      success: true,
+      message: "Trashed files fetched successfully.",
+      data: result.Items || [],
+    });
+  } catch (err) {
+    console.error("Error fetching trash files:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch trash files.",
+    });
   }
 };
 
@@ -232,6 +309,38 @@ export const toggleStarFile = async (req, res) => {
           "Server Error While Starring The File"
         )
       );
+  }
+};
+
+export const getStarredFiles = async (req, res) => {
+  try {
+    const user = req.user;
+
+    const userId = user.userId;
+
+    const params = {
+      TableName: FILES_TABLE,
+      KeyConditionExpression: "userId = :uid",
+      FilterExpression: "isStarred = :starred",
+      ExpressionAttributeValues: {
+        ":uid": userId,
+        ":starred": true,
+      },
+    };
+
+    const result = await dynamoDb.query(params).promise();
+
+    return res.status(200).json({
+      success: true,
+      message: "Starred files fetched successfully.",
+      files: result.Items || [],
+    });
+  } catch (error) {
+    console.error("Error fetching starred files:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch starred files.",
+    });
   }
 };
 
@@ -349,8 +458,6 @@ export const moveFileToFolder = async (req, res) => {
       );
   }
 };
-
-// file.controller.js
 
 export const bulkMoveFilesToFolder = async (req, res) => {
   try {
@@ -474,41 +581,88 @@ export const getAllFoldersForUser = async (req, res) => {
   }
 };
 
-export const getTrashedFiles = async (req, res) => {
-  const user = req.user
-
-  const userId = user.userId
-
-  if (!userId) {
-    return res.status(400).json({
-      success: false,
-      message: "User ID is required.",
-    });
-  }
-
-  const params = {
-    TableName: "files",
-    KeyConditionExpression: "userId = :uid",
-    FilterExpression: "is_deleted = :isDeleted",
-    ExpressionAttributeValues: {
-      ":uid": userId,
-      ":isDeleted": true,
-    },
-  };
-
+export const getRecentUploads = async (req, res) => {
   try {
+    const userId = req.user.userId;
+
+    const params = {
+      TableName: FILES_TABLE,
+      KeyConditionExpression: "userId = :uid",
+      ExpressionAttributeValues: {
+        ":uid": userId,
+      },
+      FilterExpression: "isDeleted = :isDeleted",
+      ExpressionAttributeValues: {
+        ":uid": userId,
+        ":isDeleted": false,
+      },
+    };
+
     const result = await dynamoDb.query(params).promise();
+    const files = result.Items || [];
+
+    const now = Date.now();
+    const fiveHoursMs = 5 * 60 * 60 * 1000;
+    const recentFiles = files.filter((file) => {
+      if (!file.uploadedAt) return false;
+      const uploadedAt = new Date(file.uploadedAt).getTime();
+      return now - uploadedAt <= fiveHoursMs;
+    });
 
     return res.status(200).json({
       success: true,
-      message: "Trashed files fetched successfully.",
-      data: result.Items || [],
+      message: "Recent uploads fetched successfully.",
+      files: recentFiles,
     });
-  } catch (err) {
-    console.error("Error fetching trash files:", err);
+  } catch (error) {
+    console.error("Error fetching recent uploads:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to fetch trash files.",
+      message: "Failed to fetch recent uploads.",
     });
+  }
+};
+
+export const downloadFile = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { fileId } = req.query;
+
+    const result = await dynamoDb
+      .get({
+        TableName: FILES_TABLE,
+        Key: { userId, fileId },
+      })
+      .promise();
+
+    if (!result.Item) {
+      return res
+        .status(404)
+        .send(errorHandler(404, "Not Found", "File not found"));
+    }
+
+    const fileKey = `${userId}/${fileId}-${result.Item.fileName}`;
+
+    const params = {
+      Bucket: BUCKET_NAME,
+      Key: fileKey,
+      Expires: 60 * 5,
+      ResponseContentDisposition: `attachment; filename="${result.Item.fileName}"`,
+    };
+
+    const url = s3.getSignedUrl("getObject", params);
+
+    return res.status(200).json({
+      success: true,
+      downloadUrl: url,
+      fileName: result.Item.fileName,
+    });
+  } catch (error) {
+    console.error("Download File Error:", error);
+    return res
+      .status(500)
+      .send(
+        errorHandler(500, "Download Failed", "Server error during download")
+      );
   }
 };
