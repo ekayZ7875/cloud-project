@@ -56,7 +56,7 @@ export const userSignup = async (req, res) => {
         userId: user.userId,
         email: user.email,
       },
-      process.env.JWT_SECRET,
+      "process.env.JWT_SECRET_KEY",
       { expiresIn: "7d" }
     );
 
@@ -122,7 +122,7 @@ export const userLogin = async (req, res) => {
         userId: user.userId,
         email: user.email,
       },
-      process.env.JWT_SECRET_KEY,
+      "process.env.JWT_SECRET_KEY",
       { expiresIn: "7d" }
     );
 

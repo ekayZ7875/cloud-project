@@ -18,7 +18,7 @@ app.use(bodyParser.urlencoded({ extended: true })); // for form-data payloads
 app.use(bodyParser.json()); // For JSON payloads
 app.use(morgan("dev"));
 
-const allowedOrigins = [];
+const allowedOrigins = ["http://localhost:5173"];
 
 app.use(
   cors({

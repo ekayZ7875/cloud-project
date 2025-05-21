@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+@keyframes border-expand-loop {
+  0% {
+    width: 0%;
+    left: 50%;
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    width: 100%;
+    left: 0;
+    opacity: 2%; /* keep visible at the end */
+  }
+}
+
+@layer components {
+  .border-expand-loop {
+    @apply relative overflow-hidden;
+  }
+
+  .border-expand-loop::before {
+    content: '';
+    @apply absolute top-0 h-[2.5px] bg-white;
+    width: 0;
+    left: 100%;
+    right: 100%;
+    animation: border-expand-loop 4s ease-in-out infinite;
+    pointer-events: none;
+  }
+}
+
+  @keyframes swing {
+    0%, 100% { transform: rotate(-15deg); }
+    50% { transform: rotate(15deg); }
+  }
