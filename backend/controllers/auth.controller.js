@@ -108,7 +108,7 @@ export const userLogin = async (req, res) => {
         .send(errorHandler(404, "Not Found", "User Not Found"));
     }
 
-    const passwordMatch = argon2.verify(uid, user.uid);
+    const passwordMatch = argon2.verify(user.uid, uid,);
     if (!passwordMatch) {
       return res
         .status(400)
@@ -122,7 +122,7 @@ export const userLogin = async (req, res) => {
         userId: user.userId,
         email: user.email,
       },
-      "process.env.JWT_SECRET_KEY",
+      process.env.JWT_SECRET_KEY,
       { expiresIn: "7d" }
     );
 
