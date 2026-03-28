@@ -49,6 +49,8 @@ export async function startQueueConsumer({ handler, concurrency = 3 }) {
   const visibilityTimeoutSeconds = Number(
     process.env.FILE_QUEUE_VISIBILITY_TIMEOUT_SEC || 600
   );
+  const idleLogEveryPolls = Number(process.env.FILE_QUEUE_IDLE_LOG_EVERY_POLLS || 3);
+  let emptyPollCount = 0;
 
   logger.info(`File processing worker started with concurrency=${concurrency}`);
 
@@ -61,8 +63,18 @@ export async function startQueueConsumer({ handler, concurrency = 3 }) {
     });
 
     if (!messages.length) {
+      emptyPollCount += 1;
+      if (idleLogEveryPolls > 0 && emptyPollCount % idleLogEveryPolls === 0) {
+        logger.info(
+          `Worker idle: no messages in queue after ${emptyPollCount} poll cycles (~${
+            emptyPollCount * 20
+          }s)`
+        );
+      }
       continue;
     }
+
+    emptyPollCount = 0;
 
     await Promise.all(messages.map((message) => processSqsMessage(message, handler)));
   }

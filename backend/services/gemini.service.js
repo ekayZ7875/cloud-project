@@ -24,6 +24,7 @@ dotenv.config();
 const FALLBACK_LLM_MODELS = ["gemini-3-flash-preview"];
 const SUPPORTED_PROVIDERS = new Set(["gemini", "ollama"]);
 const GEMINI_ANALYZE_MAX_CHARS = Number(process.env.GEMINI_ANALYZE_MAX_CHARS || 20000);
+const OLLAMA_ANALYZE_MAX_CHARS = Number(process.env.OLLAMA_ANALYZE_MAX_CHARS || 12000);
 const OLLAMA_EMBED_MAX_CHARS = Number(process.env.OLLAMA_EMBED_MAX_CHARS || 6000);
 
 const LLM_PROMPT_TEMPLATE = `You are an AI document intelligence and indexing engine.
@@ -296,6 +297,35 @@ function buildFallbackPayload(documentText) {
   return validateFileUnderstandingPayload(payload);
 }
 
+function createAnalyzeInputCandidates(documentText) {
+  const cleaned = (documentText || "").replace(/\s+/g, " ").trim();
+  if (!cleaned) {
+    return [];
+  }
+
+  const maxChars = Math.max(2000, OLLAMA_ANALYZE_MAX_CHARS);
+  const limits = [maxChars, Math.floor(maxChars * 0.66), Math.floor(maxChars * 0.4), 4000, 2000];
+  const candidates = [];
+
+  for (const limit of limits) {
+    const safeLimit = Math.max(1000, limit);
+    if (cleaned.length <= safeLimit) {
+      candidates.push(cleaned);
+      continue;
+    }
+
+    const sliced = cleaned.slice(0, safeLimit);
+    const boundary = sliced.lastIndexOf(" ");
+    candidates.push((boundary > 0 ? sliced.slice(0, boundary) : sliced).trim());
+  }
+
+  return [...new Set(candidates.filter(Boolean))];
+}
+
+function isModelOutputValidationError(error) {
+  return error instanceof InvalidLlmJsonError || String(error?.name || "") === "ZodError";
+}
+
 function createEmbeddingInputCandidates(text) {
   const cleaned = (text || "").replace(/\s+/g, " ").trim();
   if (!cleaned) {
@@ -485,56 +515,67 @@ async function analyzeDocumentRawWithOllama(documentText) {
     throw new NonRetryableProcessingError("Document text is empty");
   }
 
-  const prompt = buildPrompt(trimDocumentForAnalyze(documentText));
-  const attempts = [
-    {
-      model: OLLAMA_LLM_MODEL,
-      prompt,
-      stream: false,
-      format: "json",
-      options: { temperature: 0.2 },
-    },
-    {
-      model: OLLAMA_LLM_MODEL,
-      prompt,
-      stream: false,
-      options: { temperature: 0.2 },
-    },
-  ];
+  const analyzeCandidates = createAnalyzeInputCandidates(trimDocumentForAnalyze(documentText));
 
   let lastError = null;
 
-  for (const payload of attempts) {
-    try {
-      const result = await ollamaRequest("/api/generate", payload);
-      const parsed = parseJsonFromModelText(parseOllamaGenerateText(result));
-      return validateFileUnderstandingPayload(parsed);
-    } catch (error) {
-      lastError = error;
+  for (const candidateText of analyzeCandidates) {
+    const prompt = buildPrompt(candidateText);
+    const attempts = [
+      {
+        model: OLLAMA_LLM_MODEL,
+        prompt,
+        stream: false,
+        format: "json",
+        options: { temperature: 0.2 },
+      },
+      {
+        model: OLLAMA_LLM_MODEL,
+        prompt,
+        stream: false,
+        options: { temperature: 0.2 },
+      },
+    ];
 
-      if (isTransientOllamaError(error)) {
-        throw new TransientProviderError(
-          `Transient error from Ollama analyze call: ${error.message}`,
-          {
-            reason: error.message,
-            model: OLLAMA_LLM_MODEL,
-            provider: "ollama",
-            retryAfterSeconds: extractRetryAfterSeconds(error),
-          }
-        );
+    for (const payload of attempts) {
+      try {
+        const result = await ollamaRequest("/api/generate", payload);
+        const parsed = parseJsonFromModelText(parseOllamaGenerateText(result));
+        return validateFileUnderstandingPayload(parsed);
+      } catch (error) {
+        lastError = error;
+
+        if (isTransientOllamaError(error)) {
+          throw new TransientProviderError(
+            `Transient error from Ollama analyze call: ${error.message}`,
+            {
+              reason: error.message,
+              model: OLLAMA_LLM_MODEL,
+              provider: "ollama",
+              retryAfterSeconds: extractRetryAfterSeconds(error),
+            }
+          );
+        }
+
+        if (isOllamaContextLengthError(error) || isModelOutputValidationError(error)) {
+          continue;
+        }
       }
     }
   }
 
-  if (lastError instanceof InvalidLlmJsonError) {
+  if (isModelOutputValidationError(lastError) || isOllamaContextLengthError(lastError)) {
     return buildFallbackPayload(documentText);
   }
 
-  throw new NonRetryableProcessingError("Ollama analyze call failed", {
+  throw new NonRetryableProcessingError(
+    `Ollama analyze call failed: ${lastError?.message || "Unknown Ollama analyze error"}`,
+    {
     reason: lastError?.message || "Unknown Ollama analyze error",
     model: OLLAMA_LLM_MODEL,
     provider: "ollama",
-  });
+    }
+  );
 }
 
 async function embedTextWithGemini(text) {
