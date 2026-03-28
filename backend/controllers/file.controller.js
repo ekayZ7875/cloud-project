@@ -72,6 +72,7 @@ export const uploadFile = async (req, res) => {
         Item: {
           userId,
           fileId,
+          jobId, // Add this line
           fileName: file.originalname,
           fileType: file.mimetype,
           fileSize,

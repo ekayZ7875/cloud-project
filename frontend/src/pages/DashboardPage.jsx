@@ -19,7 +19,7 @@ import FileDetailModal from '../components/FileDetailModal';
 import MoveFileModal from '../components/MoveFileModal';
 import CreateFolderModal from '../components/CreateFolderModal';
 import DeleteConfirmModal from '../components/DeleteConfirmModal';
-import { RefreshCw, Folder, ChevronRight, LayoutGrid, List, Plus, FolderPlus, ArrowLeft, Trash2, MoreVertical, ExternalLink } from 'lucide-react';
+import { RefreshCw, Folder, ChevronRight, ChevronDown, LayoutGrid, List, Plus, FolderPlus, ArrowLeft, Trash2, MoreVertical, ExternalLink } from 'lucide-react';
 import { useAuth } from '../store/AuthContext';
 
 export default function DashboardPage({ view = 'all' }) {
@@ -31,7 +31,7 @@ export default function DashboardPage({ view = 'all' }) {
   const [selectedFileId, setSelectedFileId] = useState(null);
   const [moveFileId, setMoveFileId] = useState(null);
   const [showFolderModal, setShowFolderModal] = useState(false);
-  const [isGridView, setIsGridView] = useState(true);
+  const [isGridView, setIsGridView] = useState(false);
   const [currentFolder, setCurrentFolder] = useState(null);
   const [openFolderMenu, setOpenFolderMenu] = useState(null);
   const folderMenuRef = useRef(null);
@@ -211,49 +211,83 @@ export default function DashboardPage({ view = 'all' }) {
         <div style={{ display: 'flex', gap: '12px' }}>
            <button className="btn btn--ghost" onClick={() => fetchAll()} disabled={loading}><RefreshCw size={20} className={loading ? 'spin' : ''} /></button>
            
-           <div style={{ background: 'var(--bg-hover)', borderRadius: 'var(--radius-md)', display: 'flex', padding: '4px', gap: '4px' }}>
-              <button className={`btn btn--ghost`} style={{ padding: '6px', background: !isGridView ? 'white' : 'transparent', border: !isGridView ? '1px solid var(--border-light)' : 'none' }} onClick={() => setIsGridView(false)}><List size={18} /></button>
-              <button className={`btn btn--ghost`} style={{ padding: '6px', background: isGridView ? 'white' : 'transparent', border: isGridView ? '1px solid var(--border-light)' : 'none' }} onClick={() => setIsGridView(true)}><LayoutGrid size={18} /></button>
-           </div>
+        <div className="view-toggle-pill">
+           <button 
+             className={`btn btn--ghost ${!isGridView ? 'btn--active' : ''}`} 
+             onClick={() => setIsGridView(false)}
+           >
+             <List size={18} />
+           </button>
+           <button 
+             className={`btn btn--ghost ${isGridView ? 'btn--active' : ''}`} 
+             onClick={() => setIsGridView(true)}
+           >
+             <LayoutGrid size={18} />
+           </button>
+        </div>
         </div>
       </div>
 
-      {!currentFolder && view === 'all' && (
-        <section style={{ marginBottom: '48px' }}>
-           {folders.length > 0 && (
-             <>
-               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-                  <ChevronRight size={18} />
-                  <h2 style={{ fontSize: '0.9375rem', fontWeight: 600 }}>Suggested folders</h2>
+
+       {!currentFolder && view === 'all' && (
+        <section style={{ marginBottom: '48px', position: 'relative' }}>
+           {loading && files.length === 0 && (
+              <div style={{ position: 'absolute', top: '140px', left: '50%', transform: 'translateX(-50%)', zIndex: 100, pointerEvents: 'none' }}>
+                 <div className="premium-spinner"></div>
+              </div>
+           )}
+           <div style={{ marginBottom: '40px' }}>
+               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px', color: 'var(--text-main)' }}>
+                  <button className="btn btn--ghost" style={{ padding: '4px', width: 'auto', height: 'auto' }}>
+                     <ChevronDown size={20} />
+                  </button>
+                  <h2 style={{ fontSize: '1rem', fontWeight: 500 }}>Suggested folders</h2>
                </div>
                
-               <div className="suggested-grid">
-                  {folders.map(f => (
-                    <div key={f.folderId} className="folder-card" onClick={() => setCurrentFolder(f)}>
-                       <div style={{ width: '32px', height: '32px', background: '#5f6368', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <Folder size={18} fill="white" color="white" />
-                       </div>
-                       
-                       <div className="text-truncate" style={{ flex: 1, minWidth: 0 }}>
-                          <p style={{ fontSize: '0.875rem', fontWeight: 700 }} className="text-truncate">{f.name}</p>
-                          <p style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>in My Drive</p>
-                       </div>
-
-                       <button className="btn btn--ghost" style={{ padding: '6px', flexShrink: 0, marginLeft: '4px' }} onClick={(e) => { e.stopPropagation(); setOpenFolderMenu(openFolderMenu === f.folderId ? null : f.folderId); }}>
-                          <MoreVertical size={18} />
-                       </button>
-
-                       {openFolderMenu === f.folderId && (
-                         <div className="sidebar-new-menu" style={{ right: '0', top: '50px', left: 'auto', minWidth: '180px', zIndex: 1000 }} ref={folderMenuRef} onClick={(e) => e.stopPropagation()}>
-                            <button className="sidebar-new-item" onClick={() => { setCurrentFolder(f); setOpenFolderMenu(null); }}><ExternalLink size={16} /> Open Folder</button>
-                            <button className="sidebar-new-item" style={{ color: 'var(--error)' }} onClick={(e) => { e.stopPropagation(); handleOpenTrashModal(f.folderId, 'folder'); setOpenFolderMenu(null); }}><Trash2 size={16} /> Delete Folder</button>
+               <div className="suggested-grid" style={{ gap: '20px', minHeight: '80px', alignItems: 'center' }}>
+                  {folders.length > 0 ? (
+                    folders.map(f => (
+                      <div key={f.folderId} className="folder-card" style={{ background: '#f1f3f4', border: 'none', padding: '12px 16px', height: '72px', width: '220px' }} onClick={() => setCurrentFolder(f)}>
+                         <div className="google-icon-wrapper" style={{ background: 'transparent' }}>
+                            <Folder size={24} fill="#5f6368" color="#5f6368" />
                          </div>
-                       )}
-                    </div>
-                  ))}
+                         
+                         <div className="text-truncate" style={{ flex: 1, minWidth: 0, marginLeft: '4px' }}>
+                            <p style={{ fontSize: '0.875rem', fontWeight: 500, color: '#3c4043' }} className="text-truncate">{f.name}</p>
+                            <p style={{ fontSize: '0.75rem', color: '#5f6368', marginTop: '2px' }}>in My Drive</p>
+                         </div>
+
+                         <button className="btn btn--ghost" style={{ padding: '6px', flexShrink: 0, marginLeft: '4px' }} onClick={(e) => { e.stopPropagation(); setOpenFolderMenu(openFolderMenu === f.folderId ? null : f.folderId); }}>
+                            <MoreVertical size={18} color="#5f6368" />
+                         </button>
+
+                         {openFolderMenu === f.folderId && (
+                           <div className="sidebar-new-menu" style={{ right: '0', top: '50px', left: 'auto', minWidth: '180px', zIndex: 1000 }} ref={folderMenuRef} onClick={(e) => e.stopPropagation()}>
+                              <button className="sidebar-new-item" onClick={() => { setCurrentFolder(f); setOpenFolderMenu(null); }}><ExternalLink size={16} /> Open Folder</button>
+                              <button className="sidebar-new-item" style={{ color: 'var(--error)' }} onClick={(e) => { e.stopPropagation(); handleOpenTrashModal(f.folderId, 'folder'); setOpenFolderMenu(null); }}><Trash2 size={16} /> Delete Folder</button>
+                           </div>
+                         )}
+                      </div>
+                    ))
+                  ) : (
+                    <button 
+                      className="btn" 
+                      style={{ 
+                        background: '#e8f0fe', 
+                        color: '#1a73e8', 
+                        border: '1px dashed #1a73e8', 
+                        padding: '12px 24px', 
+                        borderRadius: 'var(--radius-lg)',
+                        fontSize: '0.875rem',
+                        fontWeight: 600
+                      }}
+                      onClick={() => setShowFolderModal(true)}
+                    >
+                      <Plus size={18} /> Initialize folders
+                    </button>
+                  )}
                </div>
-             </>
-           )}
+             </div>
 
            {suggestedFiles.length > 0 && (
              <div style={{ marginTop: '32px' }}>
@@ -285,9 +319,9 @@ export default function DashboardPage({ view = 'all' }) {
       {mainFiles.length > 0 && (
         <div style={{ marginTop: view === 'all' && !currentFolder ? '48px' : '0' }}>
            {view === 'all' && !currentFolder && suggestedFiles.length > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', color: '#5f6368' }}>
                  <ChevronRight size={18} />
-                 <h2 style={{ fontSize: '0.9375rem', fontWeight: 600 }}>All Chunks</h2>
+                 <h2 style={{ fontSize: '0.875rem', fontWeight: 500 }}>All Chunks</h2>
               </div>
            )}
            <FileList

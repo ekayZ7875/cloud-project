@@ -6,9 +6,29 @@ import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import FoldersPage from './pages/FoldersPage';
 
+import { useState, useEffect } from 'react';
+import { Zap } from 'lucide-react';
+
 export default function App() {
+  const [showSplash, setShowSplash] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setShowSplash(false), 2000);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <AuthProvider>
+      {showSplash && (
+        <div className="splash-loader">
+           <div className="splash-content">
+              <div className="splash-logo">
+                 <Zap size={48} fill="white" color="white" />
+              </div>
+              <h1 className="splash-title">Chunkly</h1>
+           </div>
+        </div>
+      )}
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />

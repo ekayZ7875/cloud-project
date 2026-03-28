@@ -433,6 +433,97 @@ function parseOllamaGenerateText(result) {
   return result?.response || result?.message?.content || "";
 }
 
+function normalizeWhitespace(text) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function isLikelyExtractiveSummary(summary, sourceText) {
+  const normalizedSummary = normalizeWhitespace(summary).toLowerCase();
+  const normalizedSource = normalizeWhitespace(sourceText).toLowerCase();
+
+  if (!normalizedSummary || !normalizedSource) {
+    return false;
+  }
+
+  if (normalizedSummary.length >= 60 && normalizedSource.includes(normalizedSummary)) {
+    return true;
+  }
+
+  const summaryTokens = new Set(normalizedSummary.split(" ").filter(Boolean));
+  const sourceTokens = new Set(normalizedSource.split(" ").filter(Boolean));
+  const overlap = [...summaryTokens].filter((token) => sourceTokens.has(token)).length;
+  const overlapRatio = summaryTokens.size ? overlap / summaryTokens.size : 0;
+
+  return summaryTokens.size >= 12 && overlapRatio >= 0.92;
+}
+
+function buildNarrativeSummaryPrompt(documentText, previousSummary = "") {
+  return `You are a document understanding assistant.
+Write a human-readable summary explaining what this document is saying.
+
+Rules:
+- 4-6 short sentences.
+- Explain meaning, purpose, and key details.
+- Prefer interpretation over raw OCR copy.
+- If this is an identity/government card, mention holder name, document type, important numbers (masked except last 4), and dates if present.
+- If any field is unclear, say "not clearly readable".
+- Return plain text only.
+
+Current summary (if any):
+${previousSummary || "N/A"}
+
+Document OCR text:
+${documentText}`;
+}
+
+function maskLikelyIdNumbers(text) {
+  return String(text || "").replace(/\b([A-Z0-9]{2,})([A-Z0-9]{4})\b/g, (_, head, tail) => {
+    if (head.length <= 2) {
+      return `${head}${tail}`;
+    }
+
+    return `${"*".repeat(head.length)}${tail}`;
+  });
+}
+
+async function generateNarrativeSummaryWithOllama(documentText, previousSummary = "") {
+  const sourceText = normalizeWhitespace(documentText).slice(0, 3000);
+  if (!sourceText) {
+    return normalizeWhitespace(previousSummary);
+  }
+
+  const prompt = buildNarrativeSummaryPrompt(sourceText, normalizeWhitespace(previousSummary));
+  const result = await ollamaRequest("/api/generate", {
+    model: OLLAMA_LLM_MODEL,
+    prompt,
+    stream: false,
+    options: { temperature: 0.15 },
+  });
+
+  const rewritten = normalizeWhitespace(parseOllamaGenerateText(result));
+  if (!rewritten) {
+    throw new Error("Ollama summary rewrite returned empty text");
+  }
+
+  return maskLikelyIdNumbers(rewritten).slice(0, 1200);
+}
+
+async function improveSummaryIfNeeded(documentText, summary) {
+  const baseline = normalizeWhitespace(summary);
+  const shouldRewrite = !baseline || isLikelyExtractiveSummary(baseline, documentText);
+
+  if (!shouldRewrite) {
+    return baseline;
+  }
+
+  try {
+    const rewritten = await generateNarrativeSummaryWithOllama(documentText, baseline);
+    return rewritten || baseline;
+  } catch {
+    return baseline;
+  }
+}
+
 function normalizeVector(rawVector) {
   let vector = rawVector;
   if (Array.isArray(rawVector) && rawVector.length > EMBEDDING_DIMENSION) {
@@ -541,7 +632,13 @@ async function analyzeDocumentRawWithOllama(documentText) {
       try {
         const result = await ollamaRequest("/api/generate", payload);
         const parsed = parseJsonFromModelText(parseOllamaGenerateText(result));
-        return validateFileUnderstandingPayload(parsed);
+        const validated = validateFileUnderstandingPayload(parsed);
+        const improvedSummary = await improveSummaryIfNeeded(candidateText, validated.summary);
+
+        return {
+          ...validated,
+          summary: improvedSummary || validated.summary,
+        };
       } catch (error) {
         lastError = error;
 
@@ -565,7 +662,16 @@ async function analyzeDocumentRawWithOllama(documentText) {
   }
 
   if (isModelOutputValidationError(lastError) || isOllamaContextLengthError(lastError)) {
-    return buildFallbackPayload(documentText);
+    const fallbackPayload = buildFallbackPayload(documentText);
+    const improvedSummary = await improveSummaryIfNeeded(
+      trimDocumentForAnalyze(documentText),
+      fallbackPayload.summary
+    );
+
+    return {
+      ...fallbackPayload,
+      summary: improvedSummary || fallbackPayload.summary,
+    };
   }
 
   throw new NonRetryableProcessingError(

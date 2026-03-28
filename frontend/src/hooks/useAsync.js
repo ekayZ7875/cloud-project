@@ -40,11 +40,12 @@ export function useProcessingPoller(jobId, onComplete) {
       try {
         const result = await getProcessingStatus(jobId);
         setStatus(result);
+        const currentStatus = result?.job?.status || result?.status;
         if (
-          result.status === 'COMPLETED' ||
-          result.status === 'FAILED' ||
-          result.status === 'completed' ||
-          result.status === 'failed'
+          currentStatus === 'COMPLETED' ||
+          currentStatus === 'FAILED' ||
+          currentStatus === 'completed' ||
+          currentStatus === 'failed'
         ) {
           clearInterval(intervalRef.current);
           setPolling(false);
@@ -57,7 +58,7 @@ export function useProcessingPoller(jobId, onComplete) {
     };
 
     poll();
-    intervalRef.current = setInterval(poll, 3000);
+    intervalRef.current = setInterval(poll, 15000);
   }, [jobId, onComplete]);
 
   useEffect(() => {
