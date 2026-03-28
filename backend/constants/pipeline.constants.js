@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 export const PIPELINE_STATUS = {
   PENDING: "PENDING",
   PROCESSING: "PROCESSING",

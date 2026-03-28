@@ -1,6 +1,14 @@
 import { QdrantClient } from "@qdrant/js-client-rest";
+import { createHash } from "node:crypto";
 import { QDRANT_DEFAULTS } from "../constants/pipeline.constants.js";
 import { NonRetryableProcessingError } from "./errors/pipeline.errors.js";
+
+function buildDeterministicPointId(fileId, chunkId) {
+  const hex = createHash("sha256").update(`${fileId}:${chunkId}`).digest("hex");
+
+  // Qdrant accepts UUID or unsigned integer IDs.
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
 
 function getQdrantClient() {
   const url = process.env.QDRANT_URL;
@@ -71,7 +79,7 @@ export async function upsertChunks({
   const collectionName = await ensureCollection(vectorSize);
 
   const points = chunksWithVectors.map((chunk) => ({
-    id: `${fileId}:${chunk.chunk_id}`,
+    id: buildDeterministicPointId(fileId, chunk.chunk_id),
     vector: chunk.vector,
     payload: {
       fileId,
@@ -83,10 +91,22 @@ export async function upsertChunks({
     },
   }));
 
-  await client.upsert(collectionName, {
-    points,
-    wait: true,
-  });
+  try {
+    await client.upsert(collectionName, {
+      points,
+      wait: true,
+    });
+  } catch (error) {
+    const providerMessage =
+      error?.data?.status?.error || error?.message || "Unknown Qdrant upsert error";
+
+    throw new NonRetryableProcessingError(`Qdrant upsert failed: ${providerMessage}`, {
+      provider: "qdrant",
+      status: error?.status,
+      reason: providerMessage,
+      collectionName,
+    });
+  }
 
   return {
     collectionName,

@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   AI_PROVIDER,
+  CHUNK_CONSTRAINTS,
   EMBEDDING_MODEL,
   EMBEDDING_DIMENSION,
   LLM_MODEL,
@@ -23,6 +24,7 @@ dotenv.config();
 const FALLBACK_LLM_MODELS = ["gemini-3-flash-preview"];
 const SUPPORTED_PROVIDERS = new Set(["gemini", "ollama"]);
 const GEMINI_ANALYZE_MAX_CHARS = Number(process.env.GEMINI_ANALYZE_MAX_CHARS || 20000);
+const OLLAMA_EMBED_MAX_CHARS = Number(process.env.OLLAMA_EMBED_MAX_CHARS || 6000);
 
 const LLM_PROMPT_TEMPLATE = `You are an AI document intelligence and indexing engine.
 Return STRICT JSON:
@@ -214,6 +216,118 @@ function trimDocumentForAnalyze(documentText) {
   }
 
   return documentText.slice(0, GEMINI_ANALYZE_MAX_CHARS);
+}
+
+function splitIntoSentences(text) {
+  if (!text) {
+    return [];
+  }
+
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function buildFallbackSummary(text) {
+  const sentences = splitIntoSentences(text);
+  if (sentences.length) {
+    return sentences.slice(0, 6).join(" ").slice(0, 1600);
+  }
+
+  return text.trim().slice(0, 1600) || "No summary available";
+}
+
+function chunkTextByWords(text) {
+  const words = (text || "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) {
+    return [];
+  }
+
+  const minWords = Math.max(1, Number(CHUNK_CONSTRAINTS.minWords || 300));
+  const maxWords = Math.max(minWords, Number(CHUNK_CONSTRAINTS.maxWords || 800));
+  const chunkSize = Math.min(500, maxWords);
+
+  const chunks = [];
+
+  for (let index = 0; index < words.length; index += chunkSize) {
+    const chunkWords = words.slice(index, index + chunkSize);
+    if (!chunkWords.length) {
+      continue;
+    }
+
+    if (chunkWords.length < minWords && chunks.length > 0) {
+      const carryWords = chunkWords.join(" ");
+      chunks[chunks.length - 1].text = `${chunks[chunks.length - 1].text} ${carryWords}`.trim();
+      continue;
+    }
+
+    chunks.push({
+      text: chunkWords.join(" "),
+      context: "fallback_extractive_chunk",
+      chunk_id: `chunk-${chunks.length + 1}`,
+    });
+  }
+
+  return chunks;
+}
+
+function buildFallbackPayload(documentText) {
+  const text = trimDocumentForAnalyze(documentText);
+  const chunks = chunkTextByWords(text);
+
+  const payload = {
+    summary: buildFallbackSummary(text),
+    entities: {
+      names: [],
+      dates: [],
+      deadlines: [],
+      organizations: [],
+      tasks: [],
+    },
+    tags: ["Notes"],
+    metadata: {
+      document_type: "Notes",
+      confidence: 0.35,
+    },
+    embedding_chunks: chunks,
+  };
+
+  return validateFileUnderstandingPayload(payload);
+}
+
+function createEmbeddingInputCandidates(text) {
+  const cleaned = (text || "").replace(/\s+/g, " ").trim();
+  if (!cleaned) {
+    return [];
+  }
+
+  const maxChars = Math.max(500, OLLAMA_EMBED_MAX_CHARS);
+  const limits = [maxChars, Math.floor(maxChars * 0.66), Math.floor(maxChars * 0.4), 1000];
+  const candidates = [];
+
+  for (const limit of limits) {
+    const safeLimit = Math.max(500, limit);
+    if (cleaned.length <= safeLimit) {
+      candidates.push(cleaned);
+      continue;
+    }
+
+    const sliced = cleaned.slice(0, safeLimit);
+    const boundary = sliced.lastIndexOf(" ");
+    candidates.push((boundary > 0 ? sliced.slice(0, boundary) : sliced).trim());
+  }
+
+  return [...new Set(candidates.filter(Boolean))];
+}
+
+function isOllamaContextLengthError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    message.includes("input length exceeds") ||
+    message.includes("context length") ||
+    message.includes("prompt is too long")
+  );
 }
 
 async function generateStructuredJsonText(model, prompt) {
@@ -413,7 +527,7 @@ async function analyzeDocumentRawWithOllama(documentText) {
   }
 
   if (lastError instanceof InvalidLlmJsonError) {
-    throw lastError;
+    return buildFallbackPayload(documentText);
   }
 
   throw new NonRetryableProcessingError("Ollama analyze call failed", {
@@ -470,12 +584,17 @@ async function embedTextWithOllama(text) {
     throw new NonRetryableProcessingError("Cannot embed empty text");
   }
 
+  const candidates = createEmbeddingInputCandidates(text);
+  let lastError;
+
+  for (const candidateText of candidates) {
   try {
     let result;
     try {
       result = await ollamaRequest("/api/embed", {
         model: OLLAMA_EMBEDDING_MODEL,
-        input: text,
+          input: candidateText,
+        truncate: true,
       });
     } catch (primaryError) {
       if (Number(primaryError?.status || 0) !== 404) {
@@ -485,13 +604,20 @@ async function embedTextWithOllama(text) {
       // Backward compatibility for older Ollama versions.
       result = await ollamaRequest("/api/embeddings", {
         model: OLLAMA_EMBEDDING_MODEL,
-        prompt: text,
+          prompt: candidateText,
+        truncate: true,
       });
     }
 
     const rawVector = Array.isArray(result?.embeddings) ? result.embeddings[0] : result?.embedding;
     return normalizeVector(rawVector);
   } catch (error) {
+      lastError = error;
+
+      if (isOllamaContextLengthError(error)) {
+        continue;
+      }
+
     if (error instanceof NonRetryableProcessingError) {
       throw error;
     }
@@ -508,11 +634,20 @@ async function embedTextWithOllama(text) {
       );
     }
 
-    throw new NonRetryableProcessingError("Ollama embedding call failed", {
+    throw new NonRetryableProcessingError(`Ollama embedding call failed: ${error.message}`, {
       reason: error.message,
       provider: "ollama",
     });
   }
+}
+
+  throw new NonRetryableProcessingError(
+    `Ollama embedding call failed: ${lastError?.message || "Embedding candidates exhausted"}`,
+    {
+      reason: lastError?.message,
+      provider: "ollama",
+    }
+  );
 }
 
 export async function analyzeDocumentRaw(documentText) {
