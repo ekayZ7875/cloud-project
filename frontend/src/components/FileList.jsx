@@ -126,7 +126,7 @@ export default function FileList({
                        {!isTrashView ? (
                         <>
                           <button className="sidebar-new-item" onClick={() => { onView?.(file); setOpenMenu(null); }}><ExternalLink size={14} /> Open</button>
-                          <button className="sidebar-new-item" onClick={() => { onStar?.(id, type); setOpenMenu(null); }}>
+                          <button className="sidebar-new-item" onClick={() => { onStar?.(id, !file.isStarred); setOpenMenu(null); }}>
                              <Star size={14} fill={file.isStarred ? "var(--warning)" : "none"} color={file.isStarred ? "var(--warning)" : "currentColor"} /> 
                              {file.isStarred ? 'Remove from Starred' : 'Add to Starred'}
                           </button>
@@ -245,7 +245,7 @@ export default function FileList({
                       {!isTrashView ? (
                         <>
                           <button className="sidebar-new-item" onClick={() => { onView?.(file); setOpenMenu(null); }}><ExternalLink size={16} /> Open</button>
-                          <button className="sidebar-new-item" onClick={() => { onStar?.(id, type); setOpenMenu(null); }}>
+                          <button className="sidebar-new-item" onClick={() => { onStar?.(id, !file.isStarred); setOpenMenu(null); }}>
                              <Star size={16} fill={file.isStarred ? "var(--warning)" : "none"} color={file.isStarred ? "var(--warning)" : "currentColor"} /> 
                              {file.isStarred ? 'Remove from Starred' : 'Add to Starred'}
                           </button>

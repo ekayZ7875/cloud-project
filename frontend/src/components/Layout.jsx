@@ -63,36 +63,82 @@ const UploadStatusBadge = ({ progress, fileName, status, error, onHide }) => {
 };
 
 const StorageWidget = ({ usedBytes, allowedBytes, percentage }) => {
+  const [animatedPercentage, setAnimatedPercentage] = useState(0);
+
+  // Trigger smooth sweep animation on load/update
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAnimatedPercentage(percentage);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [percentage]);
+
   const usedMB = usedBytes / (1024 * 1024);
   const totalGB = allowedBytes / (1024 * 1024 * 1024);
-  const radius = 30;
+  const radius = 32;
   const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (percentage / 100) * circumference;
+  const offset = circumference - (animatedPercentage / 100) * circumference;
 
   return (
-    <div style={{ padding: '24px 0', textAlign: 'center' }}>
-      <div className="round-progress" style={{ margin: '0 auto 16px', position: 'relative', width: '80px', height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <svg width="80" height="80" style={{ transform: 'rotate(-90deg)' }}>
-          <circle cx="40" cy="40" r={radius} stroke="#f1f5f9" strokeWidth="6" fill="none" />
+    <div className="p-6 text-center group cursor-pointer transition-all duration-300 hover:bg-slate-50 relative overflow-hidden flex flex-col items-center justify-center">
+      {/* Subtle background glow on hover */}
+      <div className="absolute inset-0 bg-gradient-to-t from-indigo-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 z-0"></div>
+      
+      <div className="relative z-10 w-20 h-20 mb-4 flex items-center justify-center transform group-hover:scale-105 transition-transform duration-500">
+        <svg width="84" height="84" className="absolute -rotate-90">
+          <defs>
+            <linearGradient id="storageGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#6366f1" />
+              <stop offset="100%" stopColor="#a855f7" />
+            </linearGradient>
+            <filter id="storageGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+              <feMerge>
+                <feMergeNode in="coloredBlur"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+          </defs>
+          
+          {/* Background Track */}
+          <circle 
+            cx="42" cy="42" r={radius} 
+            className="stroke-slate-100 transition-colors duration-300 group-hover:stroke-slate-200" 
+            strokeWidth="5" 
+            fill="none" 
+          />
+          
+          {/* Animated Gradient Progress */}
           <circle
-            cx="40" cy="40" r={radius}
-            stroke="var(--brand-primary)"
+            cx="42" cy="42" r={radius}
+            stroke="url(#storageGradient)"
             strokeWidth="6"
             fill="none"
             strokeLinecap="round"
             strokeDasharray={circumference}
             strokeDashoffset={offset}
-            style={{ transition: 'stroke-dashoffset 1s cubic-bezier(0.4, 0, 0.2, 1)' }}
+            filter="url(#storageGlow)"
+            className="transition-all duration-1000 ease-[cubic-bezier(0.16,1,0.3,1)]"
           />
         </svg>
-        <div style={{ position: 'absolute', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8125rem', fontWeight: 800 }}>
-          {Math.round(percentage)}%
+        
+        {/* Center Percentage Text */}
+        <div className="absolute font-bold text-sm tracking-tight text-slate-700 transition-colors duration-300 group-hover:text-indigo-600">
+          {Math.round(animatedPercentage)}%
         </div>
       </div>
-      <p style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px' }}>Vault Storage</p>
-      <p style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>
-        {usedMB < 1024 ? `${usedMB.toFixed(1)} MB` : `${(usedMB/1024).toFixed(2)} GB`} of {totalGB.toFixed(0)} GB
-      </p>
+      
+      <div className="relative z-10 w-full">
+        <p className="text-[11px] font-bold text-slate-800 mb-1.5 tracking-wider uppercase opacity-80 group-hover:opacity-100 transition-opacity">
+          Vault Storage
+        </p>
+        <p className="text-xs text-slate-500 font-medium whitespace-nowrap">
+          {usedMB < 1024 
+            ? <span className="text-indigo-600 font-bold">{usedMB.toFixed(1)} MB</span> 
+            : <span className="text-indigo-600 font-bold">{(usedMB/1024).toFixed(2)} GB</span>
+          } used of {totalGB.toFixed(0)} GB
+        </p>
+      </div>
     </div>
   );
 };

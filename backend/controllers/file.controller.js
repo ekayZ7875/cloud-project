@@ -151,7 +151,7 @@ export const uploadFolder = async (req, res) => {
     const email = req.user.email;
     const files = req.files; // Array of files
     const folderName = req.body.folderName || "New Folder";
-    
+
     if (!files || files.length === 0) {
       return res.status(400).send(errorHandler(400, "No Files", "No files uploaded"));
     }
@@ -184,7 +184,7 @@ export const uploadFolder = async (req, res) => {
       const fileId = generateId("FILE");
       const jobId = generateId("JOB");
       const fileKey = `${userId}/${fileId}-${file.originalname}`;
-      
+
       // Upload to S3
       await s3.putObject({
         Bucket: BUCKET_NAME,
@@ -201,7 +201,7 @@ export const uploadFolder = async (req, res) => {
         Item: {
           userId,
           fileId,
-          folderId, 
+          folderId,
           belongs_to: folderName, // Link by human-readable name as requested
           fileName: file.originalname,
           fileType: file.mimetype,
@@ -335,8 +335,8 @@ export const restoreItem = async (req, res) => {
 
     // Remove from Trash Table
     await dynamoDb.delete({
-       TableName: "ChunklyTrashTable",
-       Key: { userId, ...(type === 'folder' ? { folderId: itemId } : { fileId: itemId }) }
+      TableName: "ChunklyTrashTable",
+      Key: { userId, ...(type === 'folder' ? { folderId: itemId } : { fileId: itemId }) }
     }).promise();
 
     return res.status(200).json({ message: "Item restored from vault" });
@@ -366,8 +366,8 @@ export const permanentDelete = async (req, res) => {
 
     // 4. Cleanup Trash
     await dynamoDb.delete({
-       TableName: "ChunklyTrashTable",
-       Key: { userId, ...(type === 'folder' ? { folderId: itemId } : { fileId: itemId }) }
+      TableName: "ChunklyTrashTable",
+      Key: { userId, ...(type === 'folder' ? { folderId: itemId } : { fileId: itemId }) }
     }).promise();
 
     return res.status(200).json({ message: "Item purged from system" });
@@ -498,7 +498,7 @@ export const getTrashedFiles = async (req, res) => {
 
   try {
     const resultFiles = await dynamoDb.query(params).promise();
-    
+
     // Also fetch trashed folders
     const paramsFolders = {
       TableName: "ChunklyUserFolders",
@@ -831,8 +831,8 @@ export const getAllFoldersForUser = async (req, res) => {
 
     const result = await dynamoDb.query(params).promise();
     const folders = result.Items.filter((folder) => {
-       const isDel = folder.isDeleted === true || folder.is_deleted === true;
-       return !isDel;
+      const isDel = folder.isDeleted === true || folder.is_deleted === true;
+      return !isDel;
     });
 
     res.status(200).json({
@@ -978,38 +978,65 @@ export const getFileProcessingStatus = async (req, res) => {
 export const getUserStorageCapacity = async (req, res) => {
   try {
     const email = req.user.email;
+    const userId = req.user.userId;
 
-    if (!email) {
+    if (!email || !userId) {
       return res
         .status(400)
-        .send(errorHandler(400, "Invalid Request", "User email is missing"));
+        .send(errorHandler(400, "Invalid Request", "User info is missing"));
     }
 
-    const result = await dynamoDb
+    // 1. Fetch user data for fileSizeAllowed
+    const userResult = await dynamoDb
       .get({
         TableName: USER_TABLE,
         Key: { email },
       })
       .promise();
 
-    const user = result.Item;
-
+    const user = userResult.Item;
     if (!user) {
       return res
         .status(404)
         .send(errorHandler(404, "Not Found", "User not found"));
     }
 
-    const usedBytes = Number(user.totalFileSize || 0);
-    const allowedBytes = Number(user.fileSizeAllowed || 0);
-    const remainingBytes = Math.max(allowedBytes - usedBytes, 0);
+    // 2. Fetch all files to dynamically sum actual consumed storage
+    const filesParams = {
+      TableName: FILES_TABLE,
+      KeyConditionExpression: "userId = :uid",
+      ExpressionAttributeValues: {
+        ":uid": userId,
+      },
+    };
+
+    const filesData = await dynamoDb.query(filesParams).promise();
+
+    // Sum sizes, optionally excluding hard-deleted or soft-deleted items
+    const dynamicUsedBytes = (filesData.Items || []).reduce((acc, file) => {
+      // Storage often still counts trashed items, but if we don't want it to, we'd check file.isDeleted
+      return acc + (Number(file.fileSize) || 0);
+    }, 0);
+
+    const allowedBytes = Number(user.fileSizeAllowed || 1073741824); // default 1GB
+    const remainingBytes = Math.max(allowedBytes - dynamicUsedBytes, 0);
     const usagePercentage =
-      allowedBytes > 0 ? Number(((usedBytes / allowedBytes) * 100).toFixed(2)) : 0;
+      allowedBytes > 0 ? Number(((dynamicUsedBytes / allowedBytes) * 100).toFixed(2)) : 0;
+
+    // Optional: Sync back up to user table if needed
+    if (Number(user.totalFileSize) !== dynamicUsedBytes) {
+      await dynamoDb.update({
+        TableName: USER_TABLE,
+        Key: { email },
+        UpdateExpression: "SET totalFileSize = :newSize",
+        ExpressionAttributeValues: { ":newSize": dynamicUsedBytes },
+      }).promise().catch(() => { });
+    }
 
     return res.status(200).send({
-      message: "Storage capacity fetched successfully",
+      message: "Storage capacity fetched dynamically",
       storage: {
-        usedBytes,
+        usedBytes: dynamicUsedBytes,
         allowedBytes,
         remainingBytes,
         usagePercentage,

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { getFile, getDownloadUrl, getProcessingStatus } from '../services/file.service';
 import { useProcessingPoller } from '../hooks/useAsync';
+import PDFViewLayout from './pdf/PDFViewLayout';
 
 export default function FileDetailModal({ fileId, onClose }) {
   const [file, setFile] = useState(null);
@@ -43,16 +44,30 @@ export default function FileDetailModal({ fileId, onClose }) {
       try {
         const fileData = await getFile(fileId);
         const actualFile = fileData.file || fileData.data || fileData;
+        
+        console.log("[DEBUG] API getFile response:", fileData);
+        console.log("[DEBUG] Extracted actualFile:", actualFile);
+        console.log("[DEBUG] Initial URLs:", {
+          s3Url: actualFile?.s3Url,
+          fileUrl: actualFile?.fileUrl,
+          url: actualFile?.url
+        });
+
         setFile(actualFile);
         
-        const initialUrl = actualFile.fileUrl || actualFile.s3Url || actualFile.url;
-        if (initialUrl) setPreviewUrl(initialUrl);
+        const initialUrl = actualFile?.s3Url || actualFile?.fileUrl || actualFile?.url;
+        console.log("[DEBUG] Chosen initialUrl for preview:", initialUrl);
 
-        // Fetch signed URL fallback ASAP
+        if (initialUrl) setPreviewUrl(encodeURI(initialUrl));
+
+        // Always fetch the signed URL as a fallback! S3 direct URLs might be Private (403 Forbidden)
         try {
-          console.log("[DEBUG] Fetching signed URL...");
+          console.log("[DEBUG] Fetching signed URL (Presigned for private buckets)...");
           const dlRes = await getDownloadUrl(fileId, false);
-          if (dlRes.downloadUrl) setPreviewUrl(dlRes.downloadUrl);
+          if (dlRes.downloadUrl) {
+             console.log("[DEBUG] Overwriting previewUrl with presigned URL:", dlRes.downloadUrl);
+             setPreviewUrl(dlRes.downloadUrl);
+          }
         } catch (e) {
           console.error("[DEBUG] Signed URL fetch failed", e);
         }
@@ -69,11 +84,14 @@ export default function FileDetailModal({ fileId, onClose }) {
 
   // Separate effect for polling to avoid dependency loops
   useEffect(() => {
-    if (file?.jobId && !polling) {
+    const currentStatus = jobResult?.job?.status || file?.status;
+    const isJobDone = currentStatus === 'COMPLETED' || currentStatus === 'FAILED';
+    
+    if (file?.jobId && !polling && !isJobDone) {
       console.log("[DEBUG] Triggering polling for jobId:", file.jobId);
       startPolling();
     }
-  }, [file?.jobId, startPolling, polling]);
+  }, [file?.jobId, file?.status, startPolling, polling, jobResult?.job?.status]);
 
   const handleDownload = async () => {
     if (!fileId || isDownloading) return;
@@ -100,6 +118,18 @@ export default function FileDetailModal({ fileId, onClose }) {
 
   const analysis = jobResult?.job?.analysis || file?.analysis;
   const isProcessed = analysis && (jobResult?.job?.status === 'COMPLETED' || (!polling && analysis));
+
+  if (isPDF) {
+    return (
+      <PDFViewLayout 
+        file={file} 
+        previewUrl={previewUrl} 
+        onClose={onClose} 
+        jobResult={jobResult} 
+        polling={polling} 
+      />
+    );
+  }
 
   return (
     <div className="modal-overlay modal-overlay--dark" onClick={onClose} style={{ zIndex: 5000 }}>
