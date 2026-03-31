@@ -7,6 +7,7 @@ import dotenv from 'dotenv'
 dotenv.config()
 
 const USER_TABLE = process.env.USER_TABLE;
+const JWT_SECRET = process.env.JWT_SECRET_KEY || process.env.JWT_SECRET;
 
 export const userSignup = async (req, res) => {
   const { uid, email, name, avatar } = req.body;
@@ -20,7 +21,7 @@ export const userSignup = async (req, res) => {
   try {
     const existingUser = await dynamoDb
       .get({
-        TableName: "users",
+        TableName: "ChunklyUsers",
         Key: { email },
       })
       .promise();
@@ -45,10 +46,16 @@ export const userSignup = async (req, res) => {
 
       await dynamoDb
         .put({
-          TableName: "users",
+          TableName: "ChunklyUsers",
           Item: user,
         })
         .promise();
+    }
+
+    if (!JWT_SECRET) {
+      return res
+        .status(500)
+        .send(errorHandler(500, "Auth Config Error", "JWT secret not configured"));
     }
 
     const token = jwt.sign(
@@ -56,7 +63,7 @@ export const userSignup = async (req, res) => {
         userId: user.userId,
         email: user.email,
       },
-      "process.env.JWT_SECRET_KEY",
+      JWT_SECRET,
       { expiresIn: "7d" }
     );
 
@@ -117,12 +124,18 @@ export const userLogin = async (req, res) => {
         );
     }
 
+    if (!JWT_SECRET) {
+      return res
+        .status(500)
+        .send(errorHandler(500, "Auth Config Error", "JWT secret not configured"));
+    }
+
     const token = jwt.sign(
       {
         userId: user.userId,
         email: user.email,
       },
-      process.env.JWT_SECRET_KEY,
+      JWT_SECRET,
       { expiresIn: "7d" }
     );
 

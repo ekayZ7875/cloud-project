@@ -7,6 +7,8 @@ import cors from "cors";
 import authRoutes from "./routes/auth.routes.js";
 import fileRoutes from "./routes/file.routes.js";
 import folderRoutes from "./routes/folder.routes.js";
+import swaggerUi from "swagger-ui-express";
+import { openApiSpec } from "./docs/openapi.js";
 
 dotenv.config();
 
@@ -29,6 +31,7 @@ app.use(
 );
 
 app.get("/", (req, res) => res.status(200).send("OK"));
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
 app.use("/api/auth", authRoutes);
 app.use("/api/files", fileRoutes);
 app.use("/api/folder", folderRoutes);
