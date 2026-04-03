@@ -16,6 +16,7 @@ export const openApiSpec = {
     { name: "Auth", description: "Authentication endpoints" },
     { name: "Files", description: "File operations" },
     { name: "Folders", description: "Folder operations" },
+    { name: "AI", description: "AI Knowledge Assistant endpoints" },
   ],
   components: {
     securitySchemes: {
@@ -642,6 +643,110 @@ export const openApiSpec = {
             },
           },
           500: { description: "Internal server error" },
+        },
+      },
+    },
+    "/api/ai/query": {
+      post: {
+        tags: ["AI"],
+        summary: "Ask AI questions based on user files",
+        description: "Process natural language queries to summarize, extract key points, or detect tasks across the user's files.",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  query: { type: "string", example: "Summarize my files" },
+                  fileId: { type: "string", nullable: true, example: "FILE_123" },
+                  folderId: { type: "string", nullable: true, example: "FOLD_456" },
+                },
+                required: ["query"],
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "AI response generated successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: { type: "string", example: "Here is the summary of your files..." },
+                    response: { type: "string", example: "⚠️ I could not find this information in your files." }
+                  },
+                },
+              },
+            },
+          },
+          400: { description: "Missing query" },
+          500: { description: "Server error" },
+        },
+      },
+    },
+    "/api/ai/insights": {
+      get: {
+        tags: ["AI"],
+        summary: "Get smart notifications and insights",
+        description: "Returns upload activity insights and detected deadlines from processed files.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            in: "query",
+            name: "windowDays",
+            required: false,
+            schema: { type: "integer", default: 7, minimum: 1 },
+          },
+          {
+            in: "query",
+            name: "deadlineLimit",
+            required: false,
+            schema: { type: "integer", default: 5, minimum: 1 },
+          },
+        ],
+        responses: {
+          200: {
+            description: "Smart insights generated successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: {
+                      type: "object",
+                      properties: {
+                        insights: {
+                          type: "array",
+                          items: { type: "string" },
+                          example: [
+                            "You uploaded 5 files this week",
+                            "Deadline detected in file: 28 March (resume.pdf)",
+                          ],
+                        },
+                        summary: {
+                          type: "object",
+                          properties: {
+                            weeklyUploads: { type: "integer", example: 5 },
+                            totalFiles: { type: "integer", example: 18 },
+                            deadlinesDetected: { type: "integer", example: 3 },
+                            windowDays: { type: "integer", example: 7 },
+                          },
+                        },
+                        generatedAt: { type: "string", format: "date-time" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          500: { description: "Server error" },
         },
       },
     },

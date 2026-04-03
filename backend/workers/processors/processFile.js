@@ -12,8 +12,11 @@ import {
 import { RETRY_POLICY, PIPELINE_STATUS } from "../../constants/pipeline.constants.js";
 
 const STAGE_TIMEOUT_MS = Number(process.env.FILE_STAGE_TIMEOUT_MS || 180000);
+const EXTRACT_TEXT_TIMEOUT_MS = Number(
+  process.env.FILE_EXTRACT_STAGE_TIMEOUT_MS || Math.max(STAGE_TIMEOUT_MS, 420000)
+);
 
-async function runWithTimeout(stageName, fn) {
+async function runWithTimeout(stageName, fn, timeoutMs = STAGE_TIMEOUT_MS) {
   let timeoutId;
 
   try {
@@ -22,12 +25,12 @@ async function runWithTimeout(stageName, fn) {
       new Promise((_, reject) => {
         timeoutId = setTimeout(() => {
           const timeoutError = new Error(
-            `${stageName} timed out after ${STAGE_TIMEOUT_MS}ms`
+            `${stageName} timed out after ${timeoutMs}ms`
           );
           timeoutError.code = "STAGE_TIMEOUT";
           timeoutError.retryable = true;
           reject(timeoutError);
-        }, STAGE_TIMEOUT_MS);
+        }, timeoutMs);
       }),
     ]);
   } finally {
@@ -81,14 +84,14 @@ export async function processFile(jobMessage) {
     logger.info(`[PIPELINE] job=${jobId} stage=extractText start`);
     const extractedText = await runWithTimeout("extractText", () =>
       extractText(s3Url)
-    );
+    , EXTRACT_TEXT_TIMEOUT_MS);
     logger.info(
       `[PIPELINE] job=${jobId} stage=extractText done chars=${extractedText.length}`
     );
 
     logger.info(`[PIPELINE] job=${jobId} stage=analyzeDocument start`);
     const analyzed = await runWithTimeout("analyzeDocument", () =>
-      analyzeDocumentWithRetry(extractedText)
+      analyzeDocumentWithRetry(extractedText, undefined, { forceProvider: "ollama" })
     );
     logger.info(
       `[PIPELINE] job=${jobId} stage=analyzeDocument done chunks=${analyzed.embedding_chunks.length}`
@@ -97,7 +100,7 @@ export async function processFile(jobMessage) {
     const chunksWithVectors = [];
     for (const chunk of analyzed.embedding_chunks) {
       const vector = await runWithTimeout(`embedText:${chunk.chunk_id}`, () =>
-        embedText(chunk.text)
+        embedText(chunk.text, { forceProvider: "ollama" })
       );
       chunksWithVectors.push({
         ...chunk,

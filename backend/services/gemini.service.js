@@ -273,6 +273,41 @@ function chunkTextByWords(text) {
   return chunks;
 }
 
+function countWords(text) {
+  return String(text || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+function buildReliableEmbeddingChunks(documentText, modelChunks = []) {
+  const sourceText = normalizeWhitespace(trimDocumentForAnalyze(documentText));
+  const sourceWords = countWords(sourceText);
+
+  const normalizedModelChunks = Array.isArray(modelChunks)
+    ? modelChunks
+        .filter((chunk) => chunk && !isBlank(chunk.text))
+        .map((chunk, index) => ({
+          text: normalizeWhitespace(chunk.text),
+          context: normalizeWhitespace(chunk.context) || "model_chunk",
+          chunk_id: String(chunk.chunk_id || `chunk-${index + 1}`),
+        }))
+    : [];
+
+  const modelWords = normalizedModelChunks.reduce((sum, chunk) => sum + countWords(chunk.text), 0);
+  const coverageRatio = sourceWords > 0 ? modelWords / sourceWords : 1;
+
+  // If model chunks are sparse/incomplete, index deterministic source chunks instead.
+  if (!normalizedModelChunks.length || (sourceWords >= 80 && coverageRatio < 0.65)) {
+    return chunkTextByWords(sourceText).map((chunk) => ({
+      ...chunk,
+      context: "source_text_chunk",
+    }));
+  }
+
+  return normalizedModelChunks;
+}
+
 function buildFallbackPayload(documentText) {
   const text = trimDocumentForAnalyze(documentText);
   const chunks = chunkTextByWords(text);
@@ -433,6 +468,10 @@ function parseOllamaGenerateText(result) {
   return result?.response || result?.message?.content || "";
 }
 
+function isBlank(value) {
+  return !String(value || "").trim();
+}
+
 function normalizeWhitespace(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
@@ -559,7 +598,14 @@ async function analyzeDocumentRawWithGemini(documentText) {
     try {
       const responseText = await generateStructuredJsonText(model, prompt);
       const parsed = parseJsonFromModelText(responseText);
-      return validateFileUnderstandingPayload(parsed);
+      const validated = validateFileUnderstandingPayload(parsed);
+      const improvedSummary = await improveSummaryIfNeeded(documentText, validated.summary);
+
+      return {
+        ...validated,
+        summary: improvedSummary || validated.summary,
+        embedding_chunks: buildReliableEmbeddingChunks(documentText, validated.embedding_chunks),
+      };
     } catch (error) {
       lastModelError = error;
 
@@ -638,6 +684,7 @@ async function analyzeDocumentRawWithOllama(documentText) {
         return {
           ...validated,
           summary: improvedSummary || validated.summary,
+          embedding_chunks: buildReliableEmbeddingChunks(documentText, validated.embedding_chunks),
         };
       } catch (error) {
         lastError = error;
@@ -797,8 +844,9 @@ async function embedTextWithOllama(text) {
   );
 }
 
-export async function analyzeDocumentRaw(documentText) {
-  const provider = getActiveProvider();
+export async function analyzeDocumentRaw(documentText, options = {}) {
+  const forceProvider = String(options.forceProvider || "").toLowerCase();
+  const provider = forceProvider || getActiveProvider();
   if (provider === "ollama") {
     return analyzeDocumentRawWithOllama(documentText);
   }
@@ -806,12 +854,16 @@ export async function analyzeDocumentRaw(documentText) {
   return analyzeDocumentRawWithGemini(documentText);
 }
 
-export async function analyzeDocumentWithRetry(documentText, maxAttempts = RETRY_POLICY.maxAttempts) {
+export async function analyzeDocumentWithRetry(
+  documentText,
+  maxAttempts = RETRY_POLICY.maxAttempts,
+  options = {}
+) {
   let lastError;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await analyzeDocumentRaw(documentText);
+      return await analyzeDocumentRaw(documentText, options);
     } catch (error) {
       lastError = error;
 
@@ -830,13 +882,135 @@ export async function analyzeDocumentWithRetry(documentText, maxAttempts = RETRY
   throw lastError;
 }
 
-export async function embedText(text) {
-  const provider = getActiveProvider();
+export async function embedText(text, options = {}) {
+  const forceProvider = String(options.forceProvider || "").toLowerCase();
+  const provider = forceProvider || getActiveProvider();
   if (provider === "ollama") {
     return embedTextWithOllama(text);
   }
 
   return embedTextWithGemini(text);
+}
+
+async function generateAssistantTextWithGemini(prompt) {
+  const client = getGeminiClient();
+  const modelCandidates = getGeminiModelCandidates();
+  let lastModelError = null;
+
+  for (const modelName of modelCandidates) {
+    const model = client.getGenerativeModel({ model: modelName });
+
+    try {
+      const result = await model.generateContent(prompt);
+      const text = result?.response?.text?.() || "";
+
+      if (isBlank(text)) {
+        throw new InvalidLlmJsonError("Gemini assistant response was empty");
+      }
+
+      return text;
+    } catch (error) {
+      lastModelError = error;
+
+      if (isModelNotFoundError(error)) {
+        continue;
+      }
+
+      if (isTransientGeminiError(error)) {
+        throw new TransientProviderError(
+          `Transient error from Gemini assistant call: ${error.message}`,
+          {
+            reason: error.message,
+            model: modelName,
+            provider: "gemini",
+            retryAfterSeconds: extractRetryAfterSeconds(error),
+          }
+        );
+      }
+
+      throw new NonRetryableProcessingError("Gemini assistant call failed", {
+        reason: error.message,
+        model: modelName,
+        provider: "gemini",
+      });
+    }
+  }
+
+  throw new NonRetryableProcessingError(
+    `No available Gemini assistant model found. Tried: ${modelCandidates.join(", ")}`,
+    {
+      reason: lastModelError?.message || "Unknown model availability error",
+      triedModels: modelCandidates,
+      provider: "gemini",
+    }
+  );
+}
+
+async function generateAssistantTextWithOllama(prompt) {
+  try {
+    const result = await ollamaRequest("/api/generate", {
+      model: OLLAMA_LLM_MODEL,
+      prompt,
+      stream: false,
+      options: {
+        temperature: 0.2,
+      },
+    });
+
+    const text = parseOllamaGenerateText(result);
+    if (isBlank(text)) {
+      throw new NonRetryableProcessingError("Ollama assistant response was empty", {
+        provider: "ollama",
+      });
+    }
+
+    return text;
+  } catch (error) {
+    if (error instanceof NonRetryableProcessingError) {
+      throw error;
+    }
+
+    if (isTransientOllamaError(error)) {
+      throw new TransientProviderError(
+        `Transient error from Ollama assistant call: ${error.message}`,
+        {
+          reason: error.message,
+          model: OLLAMA_LLM_MODEL,
+          provider: "ollama",
+          retryAfterSeconds: extractRetryAfterSeconds(error),
+        }
+      );
+    }
+
+    throw new NonRetryableProcessingError("Ollama assistant call failed", {
+      reason: error.message,
+      model: OLLAMA_LLM_MODEL,
+      provider: "ollama",
+    });
+  }
+}
+
+export async function generateAssistantText(prompt, options = {}) {
+  const forceProvider = String(options.forceProvider || "").toLowerCase();
+  const activeProvider = forceProvider || getActiveProvider();
+
+  if (activeProvider === "ollama") {
+    try {
+      return await generateAssistantTextWithOllama(prompt);
+    } catch (error) {
+      if (forceProvider === "ollama") {
+        throw error;
+      }
+
+      if (error?.retryable || error?.code === "NON_RETRYABLE_PROCESSING_ERROR") {
+        return generateAssistantTextWithGemini(prompt);
+      }
+
+      throw error;
+    }
+  }
+
+  return generateAssistantTextWithGemini(prompt);
 }
 
 function sleep(ms) {
