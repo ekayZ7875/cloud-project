@@ -341,6 +341,138 @@ export const openApiSpec = {
         },
       },
     },
+    "/api/files/search-by-tags": {
+      get: {
+        tags: ["Files"],
+        summary: "Search files by LLM-generated tags",
+        description: "Returns authenticated user's files whose processing analysis tags match the requested tag filters.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            in: "query",
+            name: "tags",
+            required: true,
+            schema: { type: "string", example: "Invoice,Notes" },
+            description: "Comma-separated tags to search for",
+          },
+          {
+            in: "query",
+            name: "match",
+            required: false,
+            schema: { type: "string", enum: ["any", "all"], default: "any" },
+            description: "any = match at least one tag, all = match all requested tags",
+          },
+          {
+            in: "query",
+            name: "folderId",
+            required: false,
+            schema: { type: "string" },
+            description: "Optional folder filter",
+          },
+          {
+            in: "query",
+            name: "limit",
+            required: false,
+            schema: { type: "integer", minimum: 1, maximum: 200, default: 50 },
+          },
+        ],
+        responses: {
+          200: {
+            description: "Matched files fetched",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    message: { type: "string" },
+                    totalMatches: { type: "integer", example: 2 },
+                    files: {
+                      type: "array",
+                      items: {
+                        allOf: [
+                          { $ref: "#/components/schemas/FileMetadata" },
+                          {
+                            type: "object",
+                            properties: {
+                              processingStatus: { type: "string", nullable: true },
+                              tags: {
+                                type: "array",
+                                items: { type: "string" },
+                              },
+                              matchedTags: {
+                                type: "array",
+                                items: { type: "string" },
+                              },
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: "Invalid tags or match query" },
+          500: { description: "Internal error" },
+        },
+      },
+    },
+    "/api/files/tags": {
+      get: {
+        tags: ["Files"],
+        summary: "Get tags for every user file",
+        description: "Returns tags for each non-deleted file owned by the authenticated user.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            in: "query",
+            name: "folderId",
+            required: false,
+            schema: { type: "string" },
+            description: "Optional folder filter",
+          },
+        ],
+        responses: {
+          200: {
+            description: "File tags fetched",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    message: { type: "string" },
+                    totalFiles: { type: "integer", example: 4 },
+                    uniqueTags: {
+                      type: "array",
+                      items: { type: "string" },
+                    },
+                    files: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          fileId: { type: "string" },
+                          fileName: { type: "string" },
+                          folderId: { type: "string", nullable: true },
+                          jobId: { type: "string", nullable: true },
+                          processingStatus: { type: "string", nullable: true },
+                          tags: {
+                            type: "array",
+                            items: { type: "string" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          500: { description: "Internal error" },
+        },
+      },
+    },
     "/api/files/delete-files": {
       post: {
         tags: ["Files"],

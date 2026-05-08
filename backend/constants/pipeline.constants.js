@@ -16,13 +16,19 @@ export const ALLOWED_TAGS = [
 ];
 
 export const AI_PROVIDER = (process.env.AI_PROVIDER || "gemini").toLowerCase();
-const DEFAULT_EMBEDDING_DIMENSION = AI_PROVIDER === "ollama" ? 768 : 1536;
+export const AI_EMBEDDING_PROVIDER = (
+  process.env.AI_EMBEDDING_PROVIDER || (AI_PROVIDER === "groq" ? "ollama" : AI_PROVIDER)
+).toLowerCase();
+const DEFAULT_EMBEDDING_DIMENSION = AI_EMBEDDING_PROVIDER === "gemini" ? 1536 : 768;
 
 export const LLM_MODEL = process.env.GEMINI_LLM_MODEL || "gemini-3-flash-preview";
+export const GROQ_LLM_MODEL = process.env.GROQ_LLM_MODEL || "llama-3.3-70b-versatile";
+export const GROQ_EMBEDDING_MODEL = process.env.GROQ_EMBEDDING_MODEL || "nomic-embed-text-v1.5";
 export const EMBEDDING_MODEL = "embedding-001";
 export const EMBEDDING_DIMENSION = Number(
   process.env.EMBEDDING_DIMENSION ||
     process.env.GEMINI_EMBEDDING_DIMENSION ||
+    process.env.GROQ_EMBEDDING_DIMENSION ||
     process.env.OLLAMA_EMBEDDING_DIMENSION ||
     DEFAULT_EMBEDDING_DIMENSION
 );

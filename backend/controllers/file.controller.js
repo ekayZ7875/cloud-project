@@ -7,6 +7,7 @@ import {
   getProcessingJob,
   markProcessingFailed,
 } from "../services/metadata.service.js";
+import { canUserAccessFile } from "../services/share.service.js";
 import { publishFileProcessingJob } from "../services/queue.service.js";
 import dotenv from "dotenv";
 import { response } from "express";
@@ -17,6 +18,21 @@ const USER_TABLE = process.env.USER_TABLE;
 const TRASH_TABLE = process.env.TRASH_TABLE;
 const FOLDERS_TABLE = process.env.FOLDERS_TABLE;
 const BUCKET_NAME = process.env.AWS_BUCKET_NAME;
+
+function normalizeTag(tag) {
+  return String(tag || "").trim().toLowerCase();
+}
+
+function parseRequestedTags(rawTags) {
+  const values = Array.isArray(rawTags) ? rawTags : [rawTags];
+
+  return [...new Set(
+    values
+      .flatMap((value) => String(value || "").split(","))
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+  )];
+}
 
 export const uploadFile = async (req, res) => {
   try {
@@ -112,6 +128,7 @@ export const uploadFile = async (req, res) => {
         uploadedAt: new Date().toISOString(),
       });
     } catch (queueError) {
+      console.log(queueError)
       await markProcessingFailed({
         userId,
         jobId,
@@ -276,6 +293,168 @@ export const getUserFiles = async (req, res) => {
   }
 };
 
+export const searchFilesByTags = async (req, res) => {
+  const userId = req.user.userId;
+  const requestedTags = parseRequestedTags(req.query.tags);
+  const matchMode = String(req.query.match || "any").toLowerCase();
+  const folderId = req.query.folderId ? String(req.query.folderId) : null;
+  const requestedLimit = Number(req.query.limit || 50);
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.min(200, Math.max(1, Math.floor(requestedLimit)))
+    : 50;
+
+  if (requestedTags.length === 0) {
+    return res
+      .status(400)
+      .send(errorHandler(400, "Invalid Request", "tags query param is required"));
+  }
+
+  if (!["any", "all"].includes(matchMode)) {
+    return res
+      .status(400)
+      .send(errorHandler(400, "Invalid Request", "match must be 'any' or 'all'"));
+  }
+
+  const normalizedRequestedTags = requestedTags.map(normalizeTag);
+
+  try {
+    const result = await dynamoDb
+      .query({
+        TableName: FILES_TABLE,
+        KeyConditionExpression: "userId = :uid",
+        ExpressionAttributeValues: {
+          ":uid": userId,
+        },
+      })
+      .promise();
+
+    let files = (result.Items || []).filter((file) => {
+      const isDeleted = file.isDeleted === true || file.is_deleted === true;
+      return !isDeleted;
+    });
+
+    if (folderId) {
+      files = files.filter((file) => file.folderId === folderId);
+    }
+
+    const matchedFiles = (
+      await Promise.all(
+        files.map(async (file) => {
+          if (!file.jobId) {
+            return null;
+          }
+
+          const job = await getProcessingJob({ userId, jobId: file.jobId });
+          const jobTags = Array.isArray(job?.analysis?.tags) ? job.analysis.tags : [];
+
+          if (jobTags.length === 0) {
+            return null;
+          }
+
+          const normalizedJobTags = jobTags.map(normalizeTag);
+          const matchedTags = requestedTags.filter((tag, index) =>
+            normalizedJobTags.includes(normalizedRequestedTags[index])
+          );
+
+          const isMatch =
+            matchMode === "all"
+              ? matchedTags.length === requestedTags.length
+              : matchedTags.length > 0;
+
+          if (!isMatch) {
+            return null;
+          }
+
+          return {
+            ...file,
+            processingStatus: job?.status || null,
+            tags: jobTags,
+            matchedTags,
+          };
+        })
+      )
+    )
+      .filter(Boolean)
+      .slice(0, limit);
+
+    return res.status(200).send({
+      message: "Files fetched successfully by tags",
+      query: {
+        tags: requestedTags,
+        match: matchMode,
+        folderId,
+        limit,
+      },
+      totalMatches: matchedFiles.length,
+      files: matchedFiles,
+    });
+  } catch (error) {
+    console.error("Search Files By Tags Error:", error);
+    return res
+      .status(500)
+      .send(errorHandler(500, "Internal Error", "Failed to search files by tags"));
+  }
+};
+
+export const getAllUserFileTags = async (req, res) => {
+  const userId = req.user.userId;
+  const folderId = req.query.folderId ? String(req.query.folderId) : null;
+
+  try {
+    const result = await dynamoDb
+      .query({
+        TableName: FILES_TABLE,
+        KeyConditionExpression: "userId = :uid",
+        ExpressionAttributeValues: {
+          ":uid": userId,
+        },
+      })
+      .promise();
+
+    let files = (result.Items || []).filter((file) => {
+      const isDeleted = file.isDeleted === true || file.is_deleted === true;
+      return !isDeleted;
+    });
+
+    if (folderId) {
+      files = files.filter((file) => file.folderId === folderId);
+    }
+
+    const fileTags = await Promise.all(
+      files.map(async (file) => {
+        const job = file.jobId
+          ? await getProcessingJob({ userId, jobId: file.jobId })
+          : null;
+
+        const tags = Array.isArray(job?.analysis?.tags) ? job.analysis.tags : [];
+
+        return {
+          fileId: file.fileId,
+          fileName: file.fileName,
+          folderId: file.folderId || null,
+          jobId: file.jobId || null,
+          processingStatus: job?.status || null,
+          tags,
+        };
+      })
+    );
+
+    const uniqueTags = [...new Set(fileTags.flatMap((file) => file.tags))].sort();
+
+    return res.status(200).send({
+      message: "User file tags fetched successfully",
+      totalFiles: fileTags.length,
+      uniqueTags,
+      files: fileTags,
+    });
+  } catch (error) {
+    console.error("Get All User File Tags Error:", error);
+    return res
+      .status(500)
+      .send(errorHandler(500, "Internal Error", "Failed to fetch file tags"));
+  }
+};
+
 export const softDeleteFolder = async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -381,7 +560,10 @@ export const getSingleFile = async (req, res) => {
     const user = req.user;
     const { fileId } = req.query;
 
-    const userId = user.userId;
+    const requesterId = user.userId;
+    const requesterEmail = user.email;
+    const ownerId = String(req.query.ownerId || requesterId);
+
     if (!fileId) {
       return res
         .status(400)
@@ -391,14 +573,29 @@ export const getSingleFile = async (req, res) => {
     const result = await dynamoDb
       .get({
         TableName: FILES_TABLE,
-        Key: { userId, fileId },
+        Key: { userId: ownerId, fileId },
       })
       .promise();
 
-    if (!result.Item) {
+    if (!result.Item || result.Item.isDeleted === true || result.Item.is_deleted === true) {
       return res
         .status(404)
         .send(errorHandler(404, "Not Found", "File not found"));
+    }
+
+    if (ownerId !== requesterId) {
+      const access = await canUserAccessFile({
+        requesterUserId: requesterId,
+        requesterEmail,
+        ownerId,
+        fileId,
+      });
+
+      if (!access.allowed) {
+        return res
+          .status(403)
+          .send(errorHandler(403, "Forbidden", "You do not have access to this file"));
+      }
     }
 
     return res.status(200).send({
@@ -888,23 +1085,40 @@ export const getRecentUploads = async (req, res) => {
 
 export const downloadFile = async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const requesterId = req.user.userId;
+    const requesterEmail = req.user.email;
     const { fileId } = req.query;
+    const ownerId = String(req.query.ownerId || requesterId);
 
     const result = await dynamoDb
       .get({
         TableName: FILES_TABLE,
-        Key: { userId, fileId },
+        Key: { userId: ownerId, fileId },
       })
       .promise();
 
-    if (!result.Item) {
+    if (!result.Item || result.Item.isDeleted === true || result.Item.is_deleted === true) {
       return res
         .status(404)
         .send(errorHandler(404, "Not Found", "File not found"));
     }
 
-    const fileKey = `${userId}/${fileId}-${result.Item.fileName}`;
+    if (ownerId !== requesterId) {
+      const access = await canUserAccessFile({
+        requesterUserId: requesterId,
+        requesterEmail,
+        ownerId,
+        fileId,
+      });
+
+      if (!access.allowed) {
+        return res
+          .status(403)
+          .send(errorHandler(403, "Forbidden", "You do not have access to this file"));
+      }
+    }
+
+    const fileKey = `${ownerId}/${fileId}-${result.Item.fileName}`;
 
     const isDownload = req.query.download === 'true';
 

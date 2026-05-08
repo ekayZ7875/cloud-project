@@ -91,7 +91,7 @@ export async function processFile(jobMessage) {
 
     logger.info(`[PIPELINE] job=${jobId} stage=analyzeDocument start`);
     const analyzed = await runWithTimeout("analyzeDocument", () =>
-      analyzeDocumentWithRetry(extractedText, undefined, { forceProvider: "ollama" })
+      analyzeDocumentWithRetry(extractedText)
     );
     logger.info(
       `[PIPELINE] job=${jobId} stage=analyzeDocument done chunks=${analyzed.embedding_chunks.length}`
@@ -100,7 +100,7 @@ export async function processFile(jobMessage) {
     const chunksWithVectors = [];
     for (const chunk of analyzed.embedding_chunks) {
       const vector = await runWithTimeout(`embedText:${chunk.chunk_id}`, () =>
-        embedText(chunk.text, { forceProvider: "ollama" })
+        embedText(chunk.text)
       );
       chunksWithVectors.push({
         ...chunk,

@@ -45,7 +45,7 @@ export async function generateKnowledgeAssistantResponse(query, fileIds = [], fi
 
   if (searchResults.length === 0) {
     // 1. Generate embedding for the user's query
-    const queryVector = await embedText(query, { forceProvider: "ollama" });
+    const queryVector = await embedText(query);
 
     // 2. Search Qdrant for semantic matches
     searchResults = await searchChunksByVector(queryVector, fileIds, 15);
@@ -76,6 +76,6 @@ export async function generateKnowledgeAssistantResponse(query, fileIds = [], fi
   // 4. Construct LLM Prompt
   const prompt = buildPrompt(query, contextData);
 
-  // 5. Query local Ollama for final response generation.
-  return generateAssistantText(prompt, { forceProvider: "ollama" });
+  // 5. Generate final response using the active LLM provider.
+  return generateAssistantText(prompt);
 }

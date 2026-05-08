@@ -11,7 +11,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon index.js",
-    "worker": "node workers/file-understanding.worker.js"
+    "worker": "node workers/file-understanding.worker.js",
+    "worker:share": "node workers/share-notification.worker.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
@@ -22,6 +23,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
+    "groq-sdk": "^1.1.2",
     "jsonwebtoken": "^9.0.2",
     "logger": "^0.0.1",
     "morgan": "^1.10.0",

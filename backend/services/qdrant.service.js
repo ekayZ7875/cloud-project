@@ -33,10 +33,37 @@ function getQdrantClient() {
     );
   }
 
+  let normalizedUrl = url;
+  try {
+    const parsed = new URL(url);
+    normalizedUrl = parsed.origin;
+  } catch {
+    // Keep original value if URL parsing fails (non-standard input).
+  }
+
   return new QdrantClient({
-    url,
+    url: normalizedUrl,
     apiKey,
+    checkCompatibility: false,
   });
+}
+
+export async function verifyQdrantConnection() {
+  const client = getQdrantClient();
+
+  try {
+    await client.getCollections();
+    return true;
+  } catch (error) {
+    const providerMessage =
+      error?.data?.status?.error || error?.message || "Unknown Qdrant health check error";
+
+    throw new NonRetryableProcessingError(`Qdrant health check failed: ${providerMessage}`, {
+      provider: "qdrant",
+      status: error?.status,
+      reason: providerMessage,
+    });
+  }
 }
 
 function extractVectorsConfig(collectionInfo) {

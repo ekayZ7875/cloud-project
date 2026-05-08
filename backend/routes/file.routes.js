@@ -9,6 +9,8 @@ import {
   getTrashedFiles,
   getStarredFiles,
   getRecentUploads,
+  searchFilesByTags,
+  getAllUserFileTags,
   downloadFile,
   getFileProcessingStatus,
   getUserStorageCapacity,
@@ -33,6 +35,8 @@ router.post("/star-file", authMiddleware, toggleStarFile);
 router.get("/get-starred-files", authMiddleware, getStarredFiles);
 router.get("/get-trashed-files", authMiddleware, getTrashedFiles);
 router.get("/get-recent-files", authMiddleware, getRecentUploads);
+router.get("/search-by-tags", authMiddleware, searchFilesByTags);
+router.get("/tags", authMiddleware, getAllUserFileTags);
 router.post("/download-file", authMiddleware, downloadFile);
 router.get("/processing-status/:jobId", authMiddleware, getFileProcessingStatus);
 router.get("/storage-capacity", authMiddleware, getUserStorageCapacity);

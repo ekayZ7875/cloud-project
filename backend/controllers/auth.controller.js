@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import argon2 from 'argon2'
 import { errorHandler } from "../utils/errorHandler.js";
 import { generateId } from "../utils/generateUserId.js";
+import { attachRecipientToPendingShares } from "../services/share.service.js";
 import dotenv from 'dotenv'
 dotenv.config()
 
@@ -66,6 +67,15 @@ export const userSignup = async (req, res) => {
       JWT_SECRET,
       { expiresIn: "7d" }
     );
+
+    try {
+      await attachRecipientToPendingShares({
+        email: user.email,
+        userId: user.userId,
+      });
+    } catch (shareAttachError) {
+      console.error("Share Reconciliation Warning:", shareAttachError.message);
+    }
 
     return res.status(200).send({
       response: {
@@ -138,6 +148,15 @@ export const userLogin = async (req, res) => {
       JWT_SECRET,
       { expiresIn: "7d" }
     );
+
+    try {
+      await attachRecipientToPendingShares({
+        email: user.email,
+        userId: user.userId,
+      });
+    } catch (shareAttachError) {
+      console.error("Share Reconciliation Warning:", shareAttachError.message);
+    }
 
     return res.status(200).send({
       response: {

@@ -1,10 +1,13 @@
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
 import {
+  AI_EMBEDDING_PROVIDER,
   AI_PROVIDER,
   CHUNK_CONSTRAINTS,
   EMBEDDING_MODEL,
   EMBEDDING_DIMENSION,
+  GROQ_LLM_MODEL,
   LLM_MODEL,
   OLLAMA_BASE_URL,
   OLLAMA_EMBEDDING_MODEL,
@@ -22,7 +25,7 @@ import { validateFileUnderstandingPayload } from "../validators/fileUnderstandin
 dotenv.config();
 
 const FALLBACK_LLM_MODELS = ["gemini-3-flash-preview"];
-const SUPPORTED_PROVIDERS = new Set(["gemini", "ollama"]);
+const SUPPORTED_PROVIDERS = new Set(["gemini", "ollama", "groq"]);
 const GEMINI_ANALYZE_MAX_CHARS = Number(process.env.GEMINI_ANALYZE_MAX_CHARS || 20000);
 const OLLAMA_ANALYZE_MAX_CHARS = Number(process.env.OLLAMA_ANALYZE_MAX_CHARS || 12000);
 const OLLAMA_EMBED_MAX_CHARS = Number(process.env.OLLAMA_EMBED_MAX_CHARS || 6000);
@@ -74,6 +77,15 @@ function getGeminiClient() {
   }
 
   return new GoogleGenerativeAI(apiKey);
+}
+
+function getGroqClient() {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    throw new NonRetryableProcessingError("GROQ_API_KEY is not configured");
+  }
+
+  return new Groq({ apiKey });
 }
 
 function parseJsonFromModelText(modelText) {
@@ -164,6 +176,20 @@ function isTransientOllamaError(error) {
     message.includes("fetch failed") ||
     message.includes("econnrefused") ||
     message.includes("socket")
+  );
+}
+
+function isTransientGroqError(error) {
+  const message = (error?.message || "").toLowerCase();
+  const status = Number(error?.status || error?.code || 0);
+
+  return (
+    [408, 429, 500, 502, 503, 504].includes(status) ||
+    message.includes("timeout") ||
+    message.includes("temporar") ||
+    message.includes("rate") ||
+    message.includes("unavailable") ||
+    message.includes("network")
   );
 }
 
@@ -395,6 +421,11 @@ function isOllamaContextLengthError(error) {
   );
 }
 
+function isGroqContextLengthError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("context") || message.includes("maximum context length");
+}
+
 async function generateStructuredJsonText(model, prompt) {
   try {
     const result = await model.generateContent({
@@ -417,6 +448,33 @@ async function generateStructuredJsonText(model, prompt) {
     }
 
     throw error;
+  }
+}
+
+async function generateStructuredJsonTextWithGroq(prompt) {
+  const client = getGroqClient();
+
+  try {
+    const response = await client.chat.completions.create({
+      model: GROQ_LLM_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+    });
+
+    return response?.choices?.[0]?.message?.content || "";
+  } catch (error) {
+    if (!String(error?.message || "").toLowerCase().includes("response_format")) {
+      throw error;
+    }
+
+    const response = await client.chat.completions.create({
+      model: GROQ_LLM_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+    });
+
+    return response?.choices?.[0]?.message?.content || "";
   }
 }
 
@@ -731,6 +789,75 @@ async function analyzeDocumentRawWithOllama(documentText) {
   );
 }
 
+async function analyzeDocumentRawWithGroq(documentText) {
+  if (!documentText || !documentText.trim()) {
+    throw new NonRetryableProcessingError("Document text is empty");
+  }
+
+  const analyzeCandidates = createAnalyzeInputCandidates(trimDocumentForAnalyze(documentText));
+  let lastError = null;
+
+  for (const candidateText of analyzeCandidates) {
+    const prompt = buildPrompt(candidateText);
+
+    try {
+      const responseText = await generateStructuredJsonTextWithGroq(prompt);
+      const parsed = parseJsonFromModelText(responseText);
+      const validated = validateFileUnderstandingPayload(parsed);
+      const improvedSummary = await improveSummaryIfNeeded(candidateText, validated.summary);
+
+      return {
+        ...validated,
+        summary: improvedSummary || validated.summary,
+        embedding_chunks: buildReliableEmbeddingChunks(documentText, validated.embedding_chunks),
+      };
+    } catch (error) {
+      lastError = error;
+
+      if (isTransientGroqError(error)) {
+        throw new TransientProviderError(`Transient error from Groq analyze call: ${error.message}`, {
+          reason: error.message,
+          model: GROQ_LLM_MODEL,
+          provider: "groq",
+          retryAfterSeconds: extractRetryAfterSeconds(error),
+        });
+      }
+
+      if (isGroqContextLengthError(error) || isModelOutputValidationError(error)) {
+        continue;
+      }
+
+      throw new NonRetryableProcessingError("Groq analyze call failed", {
+        reason: error.message,
+        model: GROQ_LLM_MODEL,
+        provider: "groq",
+      });
+    }
+  }
+
+  if (isModelOutputValidationError(lastError) || isGroqContextLengthError(lastError)) {
+    const fallbackPayload = buildFallbackPayload(documentText);
+    const improvedSummary = await improveSummaryIfNeeded(
+      trimDocumentForAnalyze(documentText),
+      fallbackPayload.summary
+    );
+
+    return {
+      ...fallbackPayload,
+      summary: improvedSummary || fallbackPayload.summary,
+    };
+  }
+
+  throw new NonRetryableProcessingError(
+    `Groq analyze call failed: ${lastError?.message || "Unknown Groq analyze error"}`,
+    {
+      reason: lastError?.message || "Unknown Groq analyze error",
+      model: GROQ_LLM_MODEL,
+      provider: "groq",
+    }
+  );
+}
+
 async function embedTextWithGemini(text) {
   if (!text || !text.trim()) {
     throw new NonRetryableProcessingError("Cannot embed empty text");
@@ -782,58 +909,58 @@ async function embedTextWithOllama(text) {
   let lastError;
 
   for (const candidateText of candidates) {
-  try {
-    let result;
     try {
-      result = await ollamaRequest("/api/embed", {
-        model: OLLAMA_EMBEDDING_MODEL,
+      let result;
+      try {
+        result = await ollamaRequest("/api/embed", {
+          model: OLLAMA_EMBEDDING_MODEL,
           input: candidateText,
-        truncate: true,
-      });
-    } catch (primaryError) {
-      if (Number(primaryError?.status || 0) !== 404) {
-        throw primaryError;
+          truncate: true,
+        });
+      } catch (primaryError) {
+        if (Number(primaryError?.status || 0) !== 404) {
+          throw primaryError;
+        }
+
+        // Backward compatibility for older Ollama versions.
+        result = await ollamaRequest("/api/embeddings", {
+          model: OLLAMA_EMBEDDING_MODEL,
+          prompt: candidateText,
+          truncate: true,
+        });
       }
 
-      // Backward compatibility for older Ollama versions.
-      result = await ollamaRequest("/api/embeddings", {
-        model: OLLAMA_EMBEDDING_MODEL,
-          prompt: candidateText,
-        truncate: true,
-      });
-    }
-
-    const rawVector = Array.isArray(result?.embeddings) ? result.embeddings[0] : result?.embedding;
-    return normalizeVector(rawVector);
-  } catch (error) {
+      const rawVector = Array.isArray(result?.embeddings) ? result.embeddings[0] : result?.embedding;
+      return normalizeVector(rawVector);
+    } catch (error) {
       lastError = error;
 
       if (isOllamaContextLengthError(error)) {
         continue;
       }
 
-    if (error instanceof NonRetryableProcessingError) {
-      throw error;
-    }
+      if (error instanceof NonRetryableProcessingError) {
+        throw error;
+      }
 
-    if (isTransientOllamaError(error)) {
-      throw new TransientProviderError(
-        `Transient error from Ollama embedding call: ${error.message}`,
-        {
-          reason: error.message,
-          model: OLLAMA_EMBEDDING_MODEL,
-          provider: "ollama",
-          retryAfterSeconds: extractRetryAfterSeconds(error),
-        }
-      );
-    }
+      if (isTransientOllamaError(error)) {
+        throw new TransientProviderError(
+          `Transient error from Ollama embedding call: ${error.message}`,
+          {
+            reason: error.message,
+            model: OLLAMA_EMBEDDING_MODEL,
+            provider: "ollama",
+            retryAfterSeconds: extractRetryAfterSeconds(error),
+          }
+        );
+      }
 
-    throw new NonRetryableProcessingError(`Ollama embedding call failed: ${error.message}`, {
-      reason: error.message,
-      provider: "ollama",
-    });
+      throw new NonRetryableProcessingError(`Ollama embedding call failed: ${error.message}`, {
+        reason: error.message,
+        provider: "ollama",
+      });
+    }
   }
-}
 
   throw new NonRetryableProcessingError(
     `Ollama embedding call failed: ${lastError?.message || "Embedding candidates exhausted"}`,
@@ -844,11 +971,16 @@ async function embedTextWithOllama(text) {
   );
 }
 
+
 export async function analyzeDocumentRaw(documentText, options = {}) {
   const forceProvider = String(options.forceProvider || "").toLowerCase();
   const provider = forceProvider || getActiveProvider();
   if (provider === "ollama") {
     return analyzeDocumentRawWithOllama(documentText);
+  }
+
+  if (provider === "groq") {
+    return analyzeDocumentRawWithGroq(documentText);
   }
 
   return analyzeDocumentRawWithGemini(documentText);
@@ -885,6 +1017,15 @@ export async function analyzeDocumentWithRetry(
 export async function embedText(text, options = {}) {
   const forceProvider = String(options.forceProvider || "").toLowerCase();
   const provider = forceProvider || getActiveProvider();
+  
+  // When Groq is active, use AI_EMBEDDING_PROVIDER for embeddings (Groq doesn't support them)
+  if (provider === "groq") {
+    if (AI_EMBEDDING_PROVIDER === "gemini") {
+      return embedTextWithGemini(text);
+    }
+    return embedTextWithOllama(text);
+  }
+  
   if (provider === "ollama") {
     return embedTextWithOllama(text);
   }
@@ -990,9 +1131,65 @@ async function generateAssistantTextWithOllama(prompt) {
   }
 }
 
+async function generateAssistantTextWithGroq(prompt) {
+  const client = getGroqClient();
+
+  try {
+    const response = await client.chat.completions.create({
+      model: GROQ_LLM_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+    });
+
+    const text = response?.choices?.[0]?.message?.content || "";
+    if (isBlank(text)) {
+      throw new NonRetryableProcessingError("Groq assistant response was empty", {
+        provider: "groq",
+      });
+    }
+
+    return text;
+  } catch (error) {
+    if (error instanceof NonRetryableProcessingError) {
+      throw error;
+    }
+
+    if (isTransientGroqError(error)) {
+      throw new TransientProviderError(`Transient error from Groq assistant call: ${error.message}`, {
+        reason: error.message,
+        model: GROQ_LLM_MODEL,
+        provider: "groq",
+        retryAfterSeconds: extractRetryAfterSeconds(error),
+      });
+    }
+
+    throw new NonRetryableProcessingError("Groq assistant call failed", {
+      reason: error.message,
+      model: GROQ_LLM_MODEL,
+      provider: "groq",
+    });
+  }
+}
+
 export async function generateAssistantText(prompt, options = {}) {
   const forceProvider = String(options.forceProvider || "").toLowerCase();
   const activeProvider = forceProvider || getActiveProvider();
+
+  if (activeProvider === "groq") {
+    try {
+      return await generateAssistantTextWithGroq(prompt);
+    } catch (error) {
+      if (forceProvider === "groq") {
+        throw error;
+      }
+
+      if (error?.retryable || error?.code === "NON_RETRYABLE_PROCESSING_ERROR") {
+        return generateAssistantTextWithGemini(prompt);
+      }
+
+      throw error;
+    }
+  }
 
   if (activeProvider === "ollama") {
     try {
