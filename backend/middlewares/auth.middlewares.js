@@ -1,27 +1,35 @@
-import jwt from 'jsonwebtoken';
+import jwt from 'jsonwebtoken'
+import { dynamoDb } from '../config/dynamoDb.js'
+import { GetCommand } from '@aws-sdk/lib-dynamodb'
+import { ApiError } from '../utils/ApiError.js'
+import {asyncHandler} from '../utils/asyncHandler.js'
 
-const authMiddleware = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader?.match(/^\s*Bearer\s+(.+)$/i)
-    ? authHeader.replace(/^\s*Bearer\s+/i, '')
-    : authHeader;
-  const jwtSecret = process.env.JWT_SECRET_KEY || process.env.JWT_SECRET;
+const isAuthenticated = asyncHandler(async (req, res, next) => {
+  const authHeader = req.headers.authorization
 
-  if (!token) {
-    return res.status(401).json({ error: 'Access denied. No token provided.' });
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    throw new ApiError(401, 'No token provided, please login first')
   }
 
-  if (!jwtSecret) {
-    return res.status(500).json({ error: 'JWT secret is not configured.' });
-  }
+  const token = authHeader.split(' ')[1]
 
+  let decoded
   try {
-    const decoded = jwt.verify(token, jwtSecret);
-    req.user = decoded;
-    next();
-  } catch (error) {
-    res.status(403).json({ error: 'Invalid token.' });
+    decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET)
+  } catch {
+    throw new ApiError(401, 'Invalid or expired access token')
   }
-};
 
-export default authMiddleware;
+  // Fetch fresh user from DynamoDB and attach to req
+  const { Item: user } = await dynamoDb.send(new GetCommand({
+    TableName: process.env.USERS_TABLE,
+    Key: { email: decoded.email },
+  }))
+
+  if (!user) throw new ApiError(401, 'User no longer exists')
+
+  req.user = user
+  next()
+})
+
+export { isAuthenticated }

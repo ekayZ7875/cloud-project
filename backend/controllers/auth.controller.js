@@ -1,162 +1,132 @@
-import { dynamoDb } from "../config/dynamoDB/index.js";
-import jwt from "jsonwebtoken";
-import argon2 from 'argon2'
-import { errorHandler } from "../utils/errorHandler.js";
-import { generateId } from "../utils/generateUserId.js";
-import dotenv from 'dotenv'
-dotenv.config()
+import jwt from 'jsonwebtoken'
+import { dynamoDb } from '../config/dynamoDb.js'
+import { UpdateCommand, GetCommand } from '@aws-sdk/lib-dynamodb'
+import {asyncHandler} from '../utils/asyncHandler.js'
+import { ApiError } from '../utils/ApiError.js'
 
-const USER_TABLE = process.env.USER_TABLE;
-const JWT_SECRET = process.env.JWT_SECRET_KEY || process.env.JWT_SECRET;
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-export const userSignup = async (req, res) => {
-  const { uid, email, name, avatar } = req.body;
+const generateAccessToken = (user) => {
+  return jwt.sign(
+    { email: user.email, name: user.name },
+    process.env.JWT_ACCESS_SECRET,
+    { expiresIn: '15m' }
+  )
+}
 
-  if (!uid || !email || !name) {
-    return res
-      .status(400)
-      .send(errorHandler(400, "Missing Fields", "Required fields missing"));
-  }
+const generateRefreshToken = (user) => {
+  return jwt.sign(
+    { email: user.email },
+    process.env.JWT_REFRESH_SECRET,
+    { expiresIn: '7d' }
+  )
+}
 
+const setRefreshTokenCookie = (res, token) => {
+  res.cookie('refreshToken', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  })
+}
+
+// ─── Called by Passport after Google OAuth success ────────────────────────────
+
+// @desc    Issue tokens after Google OAuth callback
+// @route   GET /auth/google/callback
+// @access  Public
+const handleGoogleCallback = asyncHandler(async (req, res) => {
+  if (!req.user) throw new ApiError(401, 'Google authentication failed')
+
+  const accessToken = generateAccessToken(req.user)
+  const refreshToken = generateRefreshToken(req.user)
+
+  // Save refreshToken in UsersTable
+  await dynamoDb.send(new UpdateCommand({
+    TableName: process.env.USERS_TABLE,
+    Key: { email: req.user.email },
+    UpdateExpression: 'SET refreshToken = :rt',
+    ExpressionAttributeValues: { ':rt': refreshToken },
+  }))
+
+  setRefreshTokenCookie(res, refreshToken)
+
+  res.redirect(`${process.env.CLIENT_URL}/auth/success?accessToken=${accessToken}`)
+})
+
+// ─── Controllers ──────────────────────────────────────────────────────────────
+
+// @desc    Get current logged-in user
+// @route   GET /auth/me
+// @access  Private
+const getMe = asyncHandler(async (req, res) => {
+  if (!req.user) throw new ApiError(401, 'Not authenticated')
+
+  res.status(200).json({
+    success: true,
+    user: {
+      email: req.user.email,
+      name: req.user.name,
+      picture: req.user.picture,
+      createdAt: req.user.createdAt,
+    },
+  })
+})
+
+// @desc    Refresh access token using refresh token from cookie
+// @route   POST /auth/refresh
+// @access  Public
+const refreshAccessToken = asyncHandler(async (req, res) => {
+  const token = req.cookies?.refreshToken
+  if (!token) throw new ApiError(401, 'No refresh token provided')
+
+  let decoded
   try {
-    const existingUser = await dynamoDb
-      .get({
-        TableName: "ChunklyUsers",
-        Key: { email },
-      })
-      .promise();
-
-    let user;
-    const hashUID = await argon2.hash(uid);
-
-    if (existingUser.Item) {
-      user = existingUser.Item;
-    } else {
-      user = {
-        userId: generateId("USR"),
-        email,
-        name,
-        uid: hashUID,
-        avatar: avatar || "",
-        totalFileSize: 0,
-        fileSizeAllowed: 1073741824,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      await dynamoDb
-        .put({
-          TableName: "ChunklyUsers",
-          Item: user,
-        })
-        .promise();
-    }
-
-    if (!JWT_SECRET) {
-      return res
-        .status(500)
-        .send(errorHandler(500, "Auth Config Error", "JWT secret not configured"));
-    }
-
-    const token = jwt.sign(
-      {
-        userId: user.userId,
-        email: user.email,
-      },
-      JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    return res.status(200).send({
-      response: {
-        token,
-        user: {
-          userId: user.userId,
-          email: user.email,
-          fullname: user.fullname,
-          lastname: user.lastname,
-          avatar: user.avatar,
-        },
-        message: "Login successful",
-        status: 200,
-      },
-    });
-  } catch (err) {
-    console.error("Firebase Auth Error:", err);
-    return res
-      .status(500)
-      .send(errorHandler(500, "Auth Failed", "Firebase login failed"));
+    decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET)
+  } catch {
+    throw new ApiError(403, 'Invalid or expired refresh token')
   }
-};
 
-export const userLogin = async (req, res) => {
-  try {
-    const { email, uid } = req.body;
+  const { Item: user } = await dynamoDb.send(new GetCommand({
+    TableName: process.env.USERS_TABLE,
+    Key: { email: decoded.email },
+  }))
 
-    if (!email || !uid) {
-      return res
-        .status(400)
-        .send(
-          errorHandler(400, "Missing Fields", "Email and UID are required")
-        );
-    }
-
-    const result = await dynamoDb
-      .get({
-        TableName: USER_TABLE,
-        Key: { email },
-      })
-      .promise();
-
-    const user = result.Item;
-    if (!user) {
-      return res
-        .status(400)
-        .send(errorHandler(404, "Not Found", "User Not Found"));
-    }
-
-    const passwordMatch = argon2.verify(user.uid, uid,);
-    if (!passwordMatch) {
-      return res
-        .status(400)
-        .send(
-          errorHandler(400, "Bad Request", "Please Enter Correct Password")
-        );
-    }
-
-    if (!JWT_SECRET) {
-      return res
-        .status(500)
-        .send(errorHandler(500, "Auth Config Error", "JWT secret not configured"));
-    }
-
-    const token = jwt.sign(
-      {
-        userId: user.userId,
-        email: user.email,
-      },
-      JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    return res.status(200).send({
-      response: {
-        token,
-        user: {
-          userId: user.userId,
-          email: user.email,
-          fullname: user.fullname,
-          lastname: user.lastname,
-          avatar: user.avatar,
-        },
-        message: "Login successful",
-        status: 200,
-      },
-    });
-  } catch (err) {
-    console.error("Login Error:", err);
-    return res
-      .status(500)
-      .send(errorHandler(500, "Login Failed", "Internal server error"));
+  if (!user || user.refreshToken !== token) {
+    throw new ApiError(403, 'Refresh token mismatch')
   }
-};
+
+  const newAccessToken = generateAccessToken(user)
+
+  res.status(200).json({ success: true, accessToken: newAccessToken })
+})
+
+// @desc    Logout — clear cookie and remove refresh token from DB
+// @route   POST /auth/logout
+// @access  Private
+const logout = asyncHandler(async (req, res) => {
+  const token = req.cookies?.refreshToken
+
+  if (token) {
+    const decoded = jwt.decode(token)
+
+    if (decoded?.email) {
+      await dynamoDb.send(new UpdateCommand({
+        TableName: process.env.USERS_TABLE,
+        Key: { email: decoded.email },
+        UpdateExpression: 'REMOVE refreshToken',
+      }))
+    }
+  }
+
+  res.clearCookie('refreshToken', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+  })
+
+  res.status(200).json({ success: true, message: 'Logged out successfully' })
+})
+
+export { handleGoogleCallback, getMe, refreshAccessToken, logout }

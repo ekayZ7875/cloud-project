@@ -1,45 +1,46 @@
-import express from "express";
-import multer from "multer";
+import express from 'express'
+import { isAuthenticated } from '../middlewares/auth.middleware.js'
+import  upload  from '../config/multer.js'
 import {
   uploadFile,
   getUserFiles,
   getSingleFile,
   softDeleteFile,
-  toggleStarFile,
   getTrashedFiles,
+  toggleStarFile,
   getStarredFiles,
   getRecentUploads,
   downloadFile,
-  getFileProcessingStatus,
-  getUserStorageCapacity,
-  getAllFoldersForUser,
-  createFolder,
-  uploadFolder,
-  softDeleteFolder,
-  restoreItem,
-  permanentDelete,
-} from "../controllers/file.controller.js";
-import authMiddleware from "../middlewares/auth.middlewares.js";
+  renameFile,
+  restoreFromTrash,
+  permanentDeleteFile,
+  emptyTrash,
+} from '../controllers/file.controller.js'
 
-const router = express.Router();
-const upload = multer();
+const router = express.Router()
 
-router.post("/upload-file", authMiddleware, upload.single("file"), uploadFile);
-router.post("/upload-folder", authMiddleware, upload.array("files"), uploadFolder);
-router.get("/get-files", authMiddleware, getUserFiles);
-router.get("/get-file", authMiddleware, getSingleFile);
-router.post("/delete-files", authMiddleware, softDeleteFile);
-router.post("/star-file", authMiddleware, toggleStarFile);
-router.get("/get-starred-files", authMiddleware, getStarredFiles);
-router.get("/get-trashed-files", authMiddleware, getTrashedFiles);
-router.get("/get-recent-files", authMiddleware, getRecentUploads);
-router.post("/download-file", authMiddleware, downloadFile);
-router.get("/processing-status/:jobId", authMiddleware, getFileProcessingStatus);
-router.get("/storage-capacity", authMiddleware, getUserStorageCapacity);
-router.get("/get-folders", authMiddleware, getAllFoldersForUser);
-router.post("/create-folder", authMiddleware, createFolder);
-router.post("/delete-folder", authMiddleware, softDeleteFolder);
-router.post("/restore-item", authMiddleware, restoreItem);
-router.post("/permanent-delete", authMiddleware, permanentDelete);
+// All routes are protected
+router.use(isAuthenticated)
 
-export default router;
+// ─── Upload ───────────────────────────────────────────────────────────────────
+router.post('/upload', upload.single('file'), uploadFile)
+
+// ─── Read ─────────────────────────────────────────────────────────────────────
+router.get('/', getUserFiles)
+router.get('/starred', getStarredFiles)
+router.get('/recent', getRecentUploads)
+router.get('/:fileId', getSingleFile)
+router.get('/:fileId/download', downloadFile)
+
+// ─── Update ───────────────────────────────────────────────────────────────────
+router.patch('/:fileId/rename', renameFile)
+router.patch('/:fileId/star', toggleStarFile)
+
+// ─── Trash ────────────────────────────────────────────────────────────────────
+router.get('/trash', getTrashedFiles)
+router.delete('/trash/empty', emptyTrash)
+router.patch('/trash/:fileId/restore', restoreFromTrash)
+router.delete('/trash/:fileId/permanent', permanentDeleteFile)
+router.delete('/:fileId', softDeleteFile)
+
+export default router
