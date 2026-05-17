@@ -10,7 +10,6 @@ import {
 import { canUserAccessFile } from "../services/share.service.js";
 import { publishFileProcessingJob } from "../services/queue.service.js";
 import dotenv from "dotenv";
-import { response } from "express";
 dotenv.config();
 
 const FILES_TABLE = process.env.FILES_TABLE;
@@ -70,7 +69,6 @@ export const uploadFile = async (req, res) => {
         .status(403)
         .send(errorHandler(403, "Limit Exceeded", "Storage limit exceeded"));
     }
-
     await s3
       .putObject({
         Bucket: BUCKET_NAME,
@@ -683,249 +681,26 @@ export const getTrashedFiles = async (req, res) => {
     });
   }
 
-  const params = {
-    TableName: "ChunklyUserFiles",
-    KeyConditionExpression: "userId = :uid",
-    FilterExpression: "isDeleted = :isDeleted",
-    ExpressionAttributeValues: {
-      ":uid": userId,
-      ":isDeleted": true,
-    },
-  }))
-}
+  try {
+    const result = await dynamoDb
+      .query({
+        TableName: TRASH_TABLE,
+        KeyConditionExpression: "userId = :uid",
+        ExpressionAttributeValues: {
+          ":uid": userId,
+        },
+      })
+      .promise();
 
-// Check if user is owner OR has shared access to the file
-const checkAccess = async (requestingEmail, fileId, ownerId) => {
-  // If user is the owner, allow
-  if (requestingEmail === ownerId) return true
-
-  // Check SharedTable for shared access
-  const { Item: shareRecord } = await dynamoDb.send(new GetCommand({
-    TableName: process.env.SHARED_TABLE,
-    Key: { fileId, sharedWithEmail: requestingEmail },
-  }))
-
-  if (!shareRecord) throw new ApiError(403, 'Access denied')
-
-  return true
-}
-
-// ─── Upload ───────────────────────────────────────────────────────────────────
-
-// @desc    Upload file to S3 + save metadata in DynamoDB
-// @route   POST /api/files/upload
-// @access  Private
-const uploadFile = asyncHandler(async (req, res) => {
-  console.log('req.file:', req.file)
-  console.log('req.body:', req.body)
-  console.log('req.user:', req.user)
-  if (!req.file) throw new ApiError(400, 'No file provided')
-
-  const { email: userId } = req.user
-  const { folderId = null, tier = 'working' } = req.body
-  const fileId = generateId('file')
-  const s3Key = `${userId}/${fileId}/${req.file.originalname}`
-
-  await s3.send(new PutObjectCommand({
-    Bucket: process.env.AWS_BUCKET_NAME,
-    Key: s3Key,
-    Body: req.file.buffer,
-    ContentType: req.file.mimetype,
-  }))
-
-  const fileItem = {
-    userId,
-    fileId,
-    name: req.file.originalname,
-    size: req.file.size,
-    mimeType: req.file.mimetype,
-    s3Key,
-    folderId,
-    tier,
-    starred: false,
-    trashed: false,
-    uploadedAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  }
-
-  await dynamoDb.send(new PutCommand({
-    TableName: process.env.FILES_TABLE,
-    Item: fileItem,
-  }))
-
-  await logActivity(userId, 'UPLOAD', { fileId, fileName: req.file.originalname })
-
-  res.status(201).json({ success: true, file: fileItem })
-})
-
-// ─── Read ─────────────────────────────────────────────────────────────────────
-
-// @desc    Get all non-trashed files for user
-// @route   GET /api/files
-// @access  Private
-const getUserFiles = asyncHandler(async (req, res) => {
-  const { email: userId } = req.user
-
-  const { Items } = await dynamoDb.send(new QueryCommand({
-    TableName: process.env.FILES_TABLE,
-    KeyConditionExpression: 'userId = :uid',
-    FilterExpression: 'trashed = :f',
-    ExpressionAttributeValues: { ':uid': userId, ':f': false },
-  }))
-
-  res.status(200).json({ success: true, files: Items })
-})
-
-// @desc    Get a single file by fileId
-// @route   GET /api/files/:fileId
-// @access  Private
-const getSingleFile = asyncHandler(async (req, res) => {
-  const { email: userId } = req.user
-  const { fileId } = req.params
-
-  // First try to find the file by fileId across any owner
-  const { Item: file } = await dynamoDb.send(new GetCommand({
-    TableName: process.env.FILES_TABLE,
-    Key: { userId: req.query.ownerId || userId, fileId },
-  }))
-
-  if (!file) throw new ApiError(404, 'File not found')
-  if (file.trashed) throw new ApiError(410, 'File is in trash')
-
-  await checkAccess(userId, fileId, file.userId)
-
-  res.status(200).json({ success: true, file })
-})
-
-// ─── Trash ────────────────────────────────────────────────────────────────────
-
-// @desc    Soft delete — copy to TrashTable, mark trashed in FilesTable
-// @route   DELETE /api/files/:fileId
-// @access  Private
-const softDeleteFile = asyncHandler(async (req, res) => {
-  const { email: userId } = req.user
-  const { fileId } = req.params
-
-  const { Item: file } = await dynamoDb.send(new GetCommand({
-    TableName: process.env.FILES_TABLE,
-    Key: { userId: req.query.ownerId || userId, fileId },
-  }))
-
-  if (!file) throw new ApiError(404, 'File not found')
-
-  await checkAccess(userId, fileId, file.userId)
-
-  await dynamoDb.send(new PutCommand({
-    TableName: process.env.TRASH_TABLE,
-    Item: { ...file, trashedAt: new Date().toISOString() },
-  }))
-
-  await dynamoDb.send(new UpdateCommand({
-    TableName: process.env.FILES_TABLE,
-    Key: { userId: file.userId, fileId },
-    UpdateExpression: 'SET trashed = :t, updatedAt = :u',
-    ExpressionAttributeValues: { ':t': true, ':u': new Date().toISOString() },
-  }))
-
-  await logActivity(userId, 'TRASH', { fileId, fileName: file.name })
-
-  res.status(200).json({ success: true, message: 'File moved to trash' })
-})
-
-// @desc    Get all trashed files for user
-// @route   GET /api/files/trash
-// @access  Private
-const getTrashedFiles = asyncHandler(async (req, res) => {
-  const { email: userId } = req.user
-
-  const { Items } = await dynamoDb.send(new QueryCommand({
-    TableName: process.env.TRASH_TABLE,
-    KeyConditionExpression: 'userId = :uid',
-    ExpressionAttributeValues: { ':uid': userId },
-  }))
-
-  res.status(200).json({ success: true, files: Items })
-})
-
-// @desc    Restore file from trash
-// @route   PATCH /api/files/trash/:fileId/restore
-// @access  Private
-const restoreFromTrash = asyncHandler(async (req, res) => {
-  const { email: userId } = req.user
-  const { fileId } = req.params
-
-  const { Item: file } = await dynamoDb.send(new GetCommand({
-    TableName: process.env.TRASH_TABLE,
-    Key: { userId, fileId },
-  }))
-
-  if (!file) throw new ApiError(404, 'File not found in trash')
-
-  await dynamoDb.send(new UpdateCommand({
-    TableName: process.env.FILES_TABLE,
-    Key: { userId, fileId },
-    UpdateExpression: 'SET trashed = :f, updatedAt = :u',
-    ExpressionAttributeValues: { ':f': false, ':u': new Date().toISOString() },
-  }))
-
-  await dynamoDb.send(new DeleteCommand({
-    TableName: process.env.TRASH_TABLE,
-    Key: { userId, fileId },
-  }))
-
-  await logActivity(userId, 'RESTORE', { fileId, fileName: file.name })
-
-  res.status(200).json({ success: true, message: 'File restored successfully' })
-})
-
-// @desc    Permanently delete file from S3 + both tables
-// @route   DELETE /api/files/trash/:fileId/permanent
-// @access  Private
-const permanentDeleteFile = asyncHandler(async (req, res) => {
-  const { email: userId } = req.user
-  const { fileId } = req.params
-
-  const { Item: file } = await dynamoDb.send(new GetCommand({
-    TableName: process.env.TRASH_TABLE,
-    Key: { userId, fileId },
-  }))
-
-  if (!file) throw new ApiError(404, 'File not found in trash')
-
-  await s3.send(new DeleteObjectCommand({
-    Bucket: process.env.AWS_BUCKET_NAME,
-    Key: file.s3Key,
-  }))
-
-  await dynamoDb.send(new DeleteCommand({
-    TableName: process.env.TRASH_TABLE,
-    Key: { userId, fileId },
-  }))
-
-  await dynamoDb.send(new DeleteCommand({
-    TableName: process.env.FILES_TABLE,
-    Key: { userId, fileId },
-  }))
-
-  await logActivity(userId, 'PERMANENT_DELETE', { fileId, fileName: file.name })
-
-  res.status(200).json({ success: true, message: 'File permanently deleted' })
-})
-
-// @desc    Empty entire trash for user
-// @route   DELETE /api/files/trash/empty
-// @access  Private
-const emptyTrash = asyncHandler(async (req, res) => {
-  const { email: userId } = req.user
-
-  const { Items } = await dynamoDb.send(new QueryCommand({
-    TableName: process.env.TRASH_TABLE,
-    KeyConditionExpression: 'userId = :uid',
-    ExpressionAttributeValues: { ':uid': userId },
-  }))
-
-  if (!Items.length) {
-    return res.status(200).json({ success: true, message: 'Trash is already empty' })
+    return res.status(200).json({
+      success: true,
+      files: result.Items || [],
+    });
+  } catch (error) {
+    console.error("Get Trashed Files Error:", error);
+    return res
+      .status(500)
+      .send(errorHandler(500, "Internal Error", "Failed to fetch trashed files"));
   }
 };
 
@@ -1017,9 +792,6 @@ export const getRecentUploads = async (req, res) => {
     const params = {
       TableName: FILES_TABLE,
       KeyConditionExpression: "userId = :uid",
-      ExpressionAttributeValues: {
-        ":uid": userId,
-      },
       FilterExpression: "isDeleted = :isDeleted",
       ExpressionAttributeValues: {
         ":uid": userId,
