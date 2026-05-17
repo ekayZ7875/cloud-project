@@ -16,6 +16,7 @@ export const openApiSpec = {
     { name: "Auth", description: "Authentication endpoints" },
     { name: "Files", description: "File operations" },
     { name: "Folders", description: "Folder operations" },
+    { name: "AI", description: "AI Knowledge Assistant endpoints" },
   ],
   components: {
     securitySchemes: {
@@ -340,6 +341,138 @@ export const openApiSpec = {
         },
       },
     },
+    "/api/files/search-by-tags": {
+      get: {
+        tags: ["Files"],
+        summary: "Search files by LLM-generated tags",
+        description: "Returns authenticated user's files whose processing analysis tags match the requested tag filters.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            in: "query",
+            name: "tags",
+            required: true,
+            schema: { type: "string", example: "Invoice,Notes" },
+            description: "Comma-separated tags to search for",
+          },
+          {
+            in: "query",
+            name: "match",
+            required: false,
+            schema: { type: "string", enum: ["any", "all"], default: "any" },
+            description: "any = match at least one tag, all = match all requested tags",
+          },
+          {
+            in: "query",
+            name: "folderId",
+            required: false,
+            schema: { type: "string" },
+            description: "Optional folder filter",
+          },
+          {
+            in: "query",
+            name: "limit",
+            required: false,
+            schema: { type: "integer", minimum: 1, maximum: 200, default: 50 },
+          },
+        ],
+        responses: {
+          200: {
+            description: "Matched files fetched",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    message: { type: "string" },
+                    totalMatches: { type: "integer", example: 2 },
+                    files: {
+                      type: "array",
+                      items: {
+                        allOf: [
+                          { $ref: "#/components/schemas/FileMetadata" },
+                          {
+                            type: "object",
+                            properties: {
+                              processingStatus: { type: "string", nullable: true },
+                              tags: {
+                                type: "array",
+                                items: { type: "string" },
+                              },
+                              matchedTags: {
+                                type: "array",
+                                items: { type: "string" },
+                              },
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: "Invalid tags or match query" },
+          500: { description: "Internal error" },
+        },
+      },
+    },
+    "/api/files/tags": {
+      get: {
+        tags: ["Files"],
+        summary: "Get tags for every user file",
+        description: "Returns tags for each non-deleted file owned by the authenticated user.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            in: "query",
+            name: "folderId",
+            required: false,
+            schema: { type: "string" },
+            description: "Optional folder filter",
+          },
+        ],
+        responses: {
+          200: {
+            description: "File tags fetched",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    message: { type: "string" },
+                    totalFiles: { type: "integer", example: 4 },
+                    uniqueTags: {
+                      type: "array",
+                      items: { type: "string" },
+                    },
+                    files: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          fileId: { type: "string" },
+                          fileName: { type: "string" },
+                          folderId: { type: "string", nullable: true },
+                          jobId: { type: "string", nullable: true },
+                          processingStatus: { type: "string", nullable: true },
+                          tags: {
+                            type: "array",
+                            items: { type: "string" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          500: { description: "Internal error" },
+        },
+      },
+    },
     "/api/files/delete-files": {
       post: {
         tags: ["Files"],
@@ -642,6 +775,110 @@ export const openApiSpec = {
             },
           },
           500: { description: "Internal server error" },
+        },
+      },
+    },
+    "/api/ai/query": {
+      post: {
+        tags: ["AI"],
+        summary: "Ask AI questions based on user files",
+        description: "Process natural language queries to summarize, extract key points, or detect tasks across the user's files.",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  query: { type: "string", example: "Summarize my files" },
+                  fileId: { type: "string", nullable: true, example: "FILE_123" },
+                  folderId: { type: "string", nullable: true, example: "FOLD_456" },
+                },
+                required: ["query"],
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "AI response generated successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: { type: "string", example: "Here is the summary of your files..." },
+                    response: { type: "string", example: "⚠️ I could not find this information in your files." }
+                  },
+                },
+              },
+            },
+          },
+          400: { description: "Missing query" },
+          500: { description: "Server error" },
+        },
+      },
+    },
+    "/api/ai/insights": {
+      get: {
+        tags: ["AI"],
+        summary: "Get smart notifications and insights",
+        description: "Returns upload activity insights and detected deadlines from processed files.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            in: "query",
+            name: "windowDays",
+            required: false,
+            schema: { type: "integer", default: 7, minimum: 1 },
+          },
+          {
+            in: "query",
+            name: "deadlineLimit",
+            required: false,
+            schema: { type: "integer", default: 5, minimum: 1 },
+          },
+        ],
+        responses: {
+          200: {
+            description: "Smart insights generated successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: {
+                      type: "object",
+                      properties: {
+                        insights: {
+                          type: "array",
+                          items: { type: "string" },
+                          example: [
+                            "You uploaded 5 files this week",
+                            "Deadline detected in file: 28 March (resume.pdf)",
+                          ],
+                        },
+                        summary: {
+                          type: "object",
+                          properties: {
+                            weeklyUploads: { type: "integer", example: 5 },
+                            totalFiles: { type: "integer", example: 18 },
+                            deadlinesDetected: { type: "integer", example: 3 },
+                            windowDays: { type: "integer", example: 7 },
+                          },
+                        },
+                        generatedAt: { type: "string", format: "date-time" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          500: { description: "Server error" },
         },
       },
     },

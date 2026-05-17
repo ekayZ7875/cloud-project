@@ -1,16 +1,21 @@
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
+import { BedrockRuntime } from "@aws-sdk/client-bedrock-runtime";
 import {
+  AI_EMBEDDING_PROVIDER,
   AI_PROVIDER,
   CHUNK_CONSTRAINTS,
-  EMBEDDING_MODEL,
   EMBEDDING_DIMENSION,
+  GROQ_LLM_MODEL,
   LLM_MODEL,
   OLLAMA_BASE_URL,
   OLLAMA_EMBEDDING_MODEL,
   OLLAMA_LLM_MODEL,
   OLLAMA_TIMEOUT_MS,
   RETRY_POLICY,
+  BEDROCK_EMBEDDING_MODEL,
+  BEDROCK_EMBEDDING_DIMENSION,
 } from "../constants/pipeline.constants.js";
 import {
   InvalidLlmJsonError,
@@ -22,42 +27,77 @@ import { validateFileUnderstandingPayload } from "../validators/fileUnderstandin
 dotenv.config();
 
 const FALLBACK_LLM_MODELS = ["gemini-3-flash-preview"];
-const SUPPORTED_PROVIDERS = new Set(["gemini", "ollama"]);
+const SUPPORTED_PROVIDERS = new Set(["gemini", "ollama", "groq"]);
 const GEMINI_ANALYZE_MAX_CHARS = Number(process.env.GEMINI_ANALYZE_MAX_CHARS || 20000);
 const OLLAMA_ANALYZE_MAX_CHARS = Number(process.env.OLLAMA_ANALYZE_MAX_CHARS || 12000);
 const OLLAMA_EMBED_MAX_CHARS = Number(process.env.OLLAMA_EMBED_MAX_CHARS || 6000);
 
-const LLM_PROMPT_TEMPLATE = `You are an AI document intelligence and indexing engine.
-Return STRICT JSON:
-{
-"summary": "5-7 lines",
-"entities": {
-"names": [],
-"dates": [],
-"deadlines": [],
-"organizations": [],
-"tasks": []
-},
-"tags": [],
-"metadata": {
-"document_type": "",
-"confidence": 0-1
-},
-"embedding_chunks": [
-{
-"text": "",
-"context": "",
-"chunk_id": ""
-}
-]
-}
-Rules:
+const LLM_PROMPT_TEMPLATE =`You are an elite AI document intelligence and indexing engine with expertise in structured information extraction, semantic chunking, and metadata classification.
 
-Only JSON
-No extra text
-No hallucination
-Allowed tags: Invoice, Resume, Notes, Legal Document, Lecture/Study Material
-Split into meaningful chunks (300-800 words)
+Your task is to deeply analyze the provided document and return a STRICT JSON response. The JSON must be syntactically valid, complete, and contain no hallucinated or fabricated information. Every field must be populated based solely on what is explicitly stated or clearly implied in the document.
+
+---
+
+OUTPUT SCHEMA (return ONLY this JSON, no preamble, no explanation, no markdown fences):
+
+{
+  "summary": "A dense 5-7 line paragraph summarizing the document's purpose, key subject matter, important people or organizations involved, critical dates or deadlines, and any action items or decisions. Write in third-person, present tense.",
+
+  "entities": {
+    "names": ["Full names of all people mentioned, e.g. 'John Smith'"],
+    "dates": ["All dates found in document, normalized to ISO 8601 format: YYYY-MM-DD"],
+    "deadlines": ["Dates or phrases indicating a deadline or due date, with context, e.g. 'Payment due: 2025-06-01'"],
+    "organizations": ["Company names, institutions, agencies, departments"],
+    "tasks": ["Action items or tasks mentioned, written as imperative statements, e.g. 'Submit final report by Friday'"],
+    "amounts": ["Monetary values, quantities, or measurements with units, e.g. '$4,500.00', '3 units'"],
+    "locations": ["Physical addresses, cities, countries, or named places"]
+  },
+
+  "tags": ["Pick 1-3 tags ONLY from this exact list: Invoice, Resume, Notes, Legal Document, Lecture/Study Material"],
+
+  "metadata": {
+    "document_type": "One of: Invoice | Resume | Notes | Legal Document | Lecture/Study Material | Unknown",
+    "language": "ISO 639-1 language code of the document, e.g. 'en'",
+    "tone": "One of: Formal | Informal | Technical | Academic | Legal | Conversational",
+    "confidence": "Float between 0.0 and 1.0 representing your confidence in the classification and extraction accuracy",
+    "page_estimate": "Estimated number of pages based on text length (integer)",
+    "has_tables": "true | false — whether the document contains tabular data",
+    "has_action_items": "true | false — whether the document contains explicit tasks or action items"
+  },
+
+  "embedding_chunks": [
+    {
+      "chunk_id": "chunk_001",
+      "text": "Raw extracted text for this chunk (300-800 words). Preserve original wording. Do not summarize.",
+      "context": "1-2 sentence description of what this chunk covers and why it was segmented here.",
+      "section_title": "Inferred section heading if applicable, else null",
+      "keywords": ["3-6 most semantically significant keywords or phrases from this chunk"],
+      "chunk_type": "One of: Introduction | Background | Main Content | Data/Figures | Conclusion | Appendix | Mixed"
+    }
+  ]
+}
+
+---
+
+CHUNKING RULES:
+- Split the document into semantically coherent chunks of 300-800 words each
+- Never split mid-sentence or mid-paragraph
+- Each chunk must be self-contained enough to answer a question without requiring another chunk
+- Assign sequential chunk IDs: chunk_001, chunk_002, etc.
+- If the document is short (< 300 words), return a single chunk with the full text
+
+EXTRACTION RULES:
+- Extract ONLY information explicitly present in the document — no inference beyond what is clearly implied
+- Dates must be normalized to ISO 8601 (YYYY-MM-DD) wherever possible; preserve original format in parentheses if ambiguous
+- Names must include full names where available; use partial names only if that is all that appears
+- Tasks must be written as clear imperative action statements
+
+OUTPUT RULES:
+- Return ONLY the JSON object — no markdown, no backticks, no comments, no leading/trailing text
+- All string values must be properly escaped
+- Arrays must never be null — use [] if empty
+- Boolean fields must be the string "true" or "false" (not actual booleans, to ensure safe parsing)
+- confidence must be a float, not a string
 
 Document:
 {{DOCUMENT_TEXT}}`;
@@ -74,6 +114,15 @@ function getGeminiClient() {
   }
 
   return new GoogleGenerativeAI(apiKey);
+}
+
+function getGroqClient() {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    throw new NonRetryableProcessingError("GROQ_API_KEY is not configured");
+  }
+
+  return new Groq({ apiKey });
 }
 
 function parseJsonFromModelText(modelText) {
@@ -164,6 +213,20 @@ function isTransientOllamaError(error) {
     message.includes("fetch failed") ||
     message.includes("econnrefused") ||
     message.includes("socket")
+  );
+}
+
+function isTransientGroqError(error) {
+  const message = (error?.message || "").toLowerCase();
+  const status = Number(error?.status || error?.code || 0);
+
+  return (
+    [408, 429, 500, 502, 503, 504].includes(status) ||
+    message.includes("timeout") ||
+    message.includes("temporar") ||
+    message.includes("rate") ||
+    message.includes("unavailable") ||
+    message.includes("network")
   );
 }
 
@@ -273,6 +336,41 @@ function chunkTextByWords(text) {
   return chunks;
 }
 
+function countWords(text) {
+  return String(text || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+function buildReliableEmbeddingChunks(documentText, modelChunks = []) {
+  const sourceText = normalizeWhitespace(trimDocumentForAnalyze(documentText));
+  const sourceWords = countWords(sourceText);
+
+  const normalizedModelChunks = Array.isArray(modelChunks)
+    ? modelChunks
+        .filter((chunk) => chunk && !isBlank(chunk.text))
+        .map((chunk, index) => ({
+          text: normalizeWhitespace(chunk.text),
+          context: normalizeWhitespace(chunk.context) || "model_chunk",
+          chunk_id: String(chunk.chunk_id || `chunk-${index + 1}`),
+        }))
+    : [];
+
+  const modelWords = normalizedModelChunks.reduce((sum, chunk) => sum + countWords(chunk.text), 0);
+  const coverageRatio = sourceWords > 0 ? modelWords / sourceWords : 1;
+
+  // If model chunks are sparse/incomplete, index deterministic source chunks instead.
+  if (!normalizedModelChunks.length || (sourceWords >= 80 && coverageRatio < 0.65)) {
+    return chunkTextByWords(sourceText).map((chunk) => ({
+      ...chunk,
+      context: "source_text_chunk",
+    }));
+  }
+
+  return normalizedModelChunks;
+}
+
 function buildFallbackPayload(documentText) {
   const text = trimDocumentForAnalyze(documentText);
   const chunks = chunkTextByWords(text);
@@ -360,6 +458,11 @@ function isOllamaContextLengthError(error) {
   );
 }
 
+function isGroqContextLengthError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("context") || message.includes("maximum context length");
+}
+
 async function generateStructuredJsonText(model, prompt) {
   try {
     const result = await model.generateContent({
@@ -382,6 +485,33 @@ async function generateStructuredJsonText(model, prompt) {
     }
 
     throw error;
+  }
+}
+
+async function generateStructuredJsonTextWithGroq(prompt) {
+  const client = getGroqClient();
+
+  try {
+    const response = await client.chat.completions.create({
+      model: GROQ_LLM_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+    });
+
+    return response?.choices?.[0]?.message?.content || "";
+  } catch (error) {
+    if (!String(error?.message || "").toLowerCase().includes("response_format")) {
+      throw error;
+    }
+
+    const response = await client.chat.completions.create({
+      model: GROQ_LLM_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+    });
+
+    return response?.choices?.[0]?.message?.content || "";
   }
 }
 
@@ -431,6 +561,10 @@ async function ollamaRequest(path, payload) {
 
 function parseOllamaGenerateText(result) {
   return result?.response || result?.message?.content || "";
+}
+
+function isBlank(value) {
+  return !String(value || "").trim();
 }
 
 function normalizeWhitespace(text) {
@@ -559,7 +693,14 @@ async function analyzeDocumentRawWithGemini(documentText) {
     try {
       const responseText = await generateStructuredJsonText(model, prompt);
       const parsed = parseJsonFromModelText(responseText);
-      return validateFileUnderstandingPayload(parsed);
+      const validated = validateFileUnderstandingPayload(parsed);
+      const improvedSummary = await improveSummaryIfNeeded(documentText, validated.summary);
+
+      return {
+        ...validated,
+        summary: improvedSummary || validated.summary,
+        embedding_chunks: buildReliableEmbeddingChunks(documentText, validated.embedding_chunks),
+      };
     } catch (error) {
       lastModelError = error;
 
@@ -638,6 +779,7 @@ async function analyzeDocumentRawWithOllama(documentText) {
         return {
           ...validated,
           summary: improvedSummary || validated.summary,
+          embedding_chunks: buildReliableEmbeddingChunks(documentText, validated.embedding_chunks),
         };
       } catch (error) {
         lastError = error;
@@ -684,44 +826,127 @@ async function analyzeDocumentRawWithOllama(documentText) {
   );
 }
 
-async function embedTextWithGemini(text) {
+async function analyzeDocumentRawWithGroq(documentText) {
+  if (!documentText || !documentText.trim()) {
+    throw new NonRetryableProcessingError("Document text is empty");
+  }
+
+  const analyzeCandidates = createAnalyzeInputCandidates(trimDocumentForAnalyze(documentText));
+  let lastError = null;
+
+  for (const candidateText of analyzeCandidates) {
+    const prompt = buildPrompt(candidateText);
+
+    try {
+      const responseText = await generateStructuredJsonTextWithGroq(prompt);
+      const parsed = parseJsonFromModelText(responseText);
+      const validated = validateFileUnderstandingPayload(parsed);
+      const improvedSummary = await improveSummaryIfNeeded(candidateText, validated.summary);
+
+      return {
+        ...validated,
+        summary: improvedSummary || validated.summary,
+        embedding_chunks: buildReliableEmbeddingChunks(documentText, validated.embedding_chunks),
+      };
+    } catch (error) {
+      lastError = error;
+
+      if (isTransientGroqError(error)) {
+        throw new TransientProviderError(`Transient error from Groq analyze call: ${error.message}`, {
+          reason: error.message,
+          model: GROQ_LLM_MODEL,
+          provider: "groq",
+          retryAfterSeconds: extractRetryAfterSeconds(error),
+        });
+      }
+
+      if (isGroqContextLengthError(error) || isModelOutputValidationError(error)) {
+        continue;
+      }
+
+      throw new NonRetryableProcessingError("Groq analyze call failed", {
+        reason: error.message,
+        model: GROQ_LLM_MODEL,
+        provider: "groq",
+      });
+    }
+  }
+
+  if (isModelOutputValidationError(lastError) || isGroqContextLengthError(lastError)) {
+    const fallbackPayload = buildFallbackPayload(documentText);
+    const improvedSummary = await improveSummaryIfNeeded(
+      trimDocumentForAnalyze(documentText),
+      fallbackPayload.summary
+    );
+
+    return {
+      ...fallbackPayload,
+      summary: improvedSummary || fallbackPayload.summary,
+    };
+  }
+
+  throw new NonRetryableProcessingError(
+    `Groq analyze call failed: ${lastError?.message || "Unknown Groq analyze error"}`,
+    {
+      reason: lastError?.message || "Unknown Groq analyze error",
+      model: GROQ_LLM_MODEL,
+      provider: "groq",
+    }
+  );
+}
+
+async function embedTextWithBedrock(text) {
   if (!text || !text.trim()) {
     throw new NonRetryableProcessingError("Cannot embed empty text");
   }
 
-  const client = getGeminiClient();
-  const model = client.getGenerativeModel({ model: EMBEDDING_MODEL });
+  const region = process.env.AWS_REGION || "us-east-1";
+  const client = new BedrockRuntime({ region });
+  const modelId = BEDROCK_EMBEDDING_MODEL || "amazon.titan-embed-text-v2:0";
 
   try {
-    const result = await model.embedContent({
-      content: {
-        parts: [{ text }],
-      },
-      taskType: "RETRIEVAL_DOCUMENT",
-      outputDimensionality: EMBEDDING_DIMENSION,
+    const response = await client.invokeModel({
+      modelId,
+      contentType: "application/json",
+      accept: "application/json",
+      body: JSON.stringify({ inputText: text }),
     });
 
-    return normalizeVector(result?.embedding?.values);
+    const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+    const embedding = responseBody?.embedding;
+
+    if (!embedding) {
+      throw new Error("No embedding in Bedrock response");
+    }
+
+    return normalizeVector(embedding);
   } catch (error) {
     if (error instanceof NonRetryableProcessingError) {
       throw error;
     }
 
-    if (isTransientGeminiError(error)) {
+    // Transient errors from Bedrock
+    if (
+      error?.name === "ThrottlingException" ||
+      error?.name === "ServiceUnavailableException" ||
+      error?.Code === "ThrottlingException" ||
+      error?.Code === "ServiceUnavailableException"
+    ) {
       throw new TransientProviderError(
-        `Transient error from Gemini embedding call: ${error.message}`,
+        `Transient error from AWS Bedrock embedding call: ${error.message}`,
         {
           reason: error.message,
-          model: EMBEDDING_MODEL,
-          provider: "gemini",
-          retryAfterSeconds: extractRetryAfterSeconds(error),
+          model: modelId,
+          provider: "bedrock",
+          retryAfterSeconds: error?.RetryAfterSeconds || 10,
         }
       );
     }
 
-    throw new NonRetryableProcessingError("Gemini embedding call failed", {
+    throw new NonRetryableProcessingError("AWS Bedrock embedding call failed", {
       reason: error.message,
-      provider: "gemini",
+      model: modelId,
+      provider: "bedrock",
     });
   }
 }
@@ -735,58 +960,58 @@ async function embedTextWithOllama(text) {
   let lastError;
 
   for (const candidateText of candidates) {
-  try {
-    let result;
     try {
-      result = await ollamaRequest("/api/embed", {
-        model: OLLAMA_EMBEDDING_MODEL,
+      let result;
+      try {
+        result = await ollamaRequest("/api/embed", {
+          model: EMBEDDING_MODEL,
           input: candidateText,
-        truncate: true,
-      });
-    } catch (primaryError) {
-      if (Number(primaryError?.status || 0) !== 404) {
-        throw primaryError;
+          truncate: true,
+        });
+      } catch (primaryError) {
+        if (Number(primaryError?.status || 0) !== 404) {
+          throw primaryError;
+        }
+
+        // Backward compatibility for older Ollama versions.
+        result = await ollamaRequest("/api/embeddings", {
+          model: EMBEDDING_MODEL,
+          prompt: candidateText,
+          truncate: true,
+        });
       }
 
-      // Backward compatibility for older Ollama versions.
-      result = await ollamaRequest("/api/embeddings", {
-        model: OLLAMA_EMBEDDING_MODEL,
-          prompt: candidateText,
-        truncate: true,
-      });
-    }
-
-    const rawVector = Array.isArray(result?.embeddings) ? result.embeddings[0] : result?.embedding;
-    return normalizeVector(rawVector);
-  } catch (error) {
+      const rawVector = Array.isArray(result?.embeddings) ? result.embeddings[0] : result?.embedding;
+      return normalizeVector(rawVector);
+    } catch (error) {
       lastError = error;
 
       if (isOllamaContextLengthError(error)) {
         continue;
       }
 
-    if (error instanceof NonRetryableProcessingError) {
-      throw error;
-    }
+      if (error instanceof NonRetryableProcessingError) {
+        throw error;
+      }
 
-    if (isTransientOllamaError(error)) {
-      throw new TransientProviderError(
-        `Transient error from Ollama embedding call: ${error.message}`,
-        {
-          reason: error.message,
-          model: OLLAMA_EMBEDDING_MODEL,
-          provider: "ollama",
-          retryAfterSeconds: extractRetryAfterSeconds(error),
-        }
-      );
-    }
+      if (isTransientOllamaError(error)) {
+        throw new TransientProviderError(
+          `Transient error from Ollama embedding call: ${error.message}`,
+          {
+            reason: error.message,
+            model: EMBEDDING_MODEL,
+            provider: "ollama",
+            retryAfterSeconds: extractRetryAfterSeconds(error),
+          }
+        );
+      }
 
-    throw new NonRetryableProcessingError(`Ollama embedding call failed: ${error.message}`, {
-      reason: error.message,
-      provider: "ollama",
-    });
+      throw new NonRetryableProcessingError(`Ollama embedding call failed: ${error.message}`, {
+        reason: error.message,
+        provider: "ollama",
+      });
+    }
   }
-}
 
   throw new NonRetryableProcessingError(
     `Ollama embedding call failed: ${lastError?.message || "Embedding candidates exhausted"}`,
@@ -797,21 +1022,31 @@ async function embedTextWithOllama(text) {
   );
 }
 
-export async function analyzeDocumentRaw(documentText) {
-  const provider = getActiveProvider();
+
+export async function analyzeDocumentRaw(documentText, options = {}) {
+  const forceProvider = String(options.forceProvider || "").toLowerCase();
+  const provider = forceProvider || getActiveProvider();
   if (provider === "ollama") {
     return analyzeDocumentRawWithOllama(documentText);
+  }
+
+  if (provider === "groq") {
+    return analyzeDocumentRawWithGroq(documentText);
   }
 
   return analyzeDocumentRawWithGemini(documentText);
 }
 
-export async function analyzeDocumentWithRetry(documentText, maxAttempts = RETRY_POLICY.maxAttempts) {
+export async function analyzeDocumentWithRetry(
+  documentText,
+  maxAttempts = RETRY_POLICY.maxAttempts,
+  options = {}
+) {
   let lastError;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await analyzeDocumentRaw(documentText);
+      return await analyzeDocumentRaw(documentText, options);
     } catch (error) {
       lastError = error;
 
@@ -830,13 +1065,192 @@ export async function analyzeDocumentWithRetry(documentText, maxAttempts = RETRY
   throw lastError;
 }
 
-export async function embedText(text) {
-  const provider = getActiveProvider();
-  if (provider === "ollama") {
-    return embedTextWithOllama(text);
+export async function embedText(text, options = {}) {
+  const forceProvider = String(options.forceProvider || "").toLowerCase();
+  const provider = forceProvider || AI_EMBEDDING_PROVIDER;
+  
+  if (provider === "bedrock") {
+    return embedTextWithBedrock(text);
+  }
+  
+  return embedTextWithOllama(text);
+}
+
+async function generateAssistantTextWithGemini(prompt) {
+  const client = getGeminiClient();
+  const modelCandidates = getGeminiModelCandidates();
+  let lastModelError = null;
+
+  for (const modelName of modelCandidates) {
+    const model = client.getGenerativeModel({ model: modelName });
+
+    try {
+      const result = await model.generateContent(prompt);
+      const text = result?.response?.text?.() || "";
+
+      if (isBlank(text)) {
+        throw new InvalidLlmJsonError("Gemini assistant response was empty");
+      }
+
+      return text;
+    } catch (error) {
+      lastModelError = error;
+
+      if (isModelNotFoundError(error)) {
+        continue;
+      }
+
+      if (isTransientGeminiError(error)) {
+        throw new TransientProviderError(
+          `Transient error from Gemini assistant call: ${error.message}`,
+          {
+            reason: error.message,
+            model: modelName,
+            provider: "gemini",
+            retryAfterSeconds: extractRetryAfterSeconds(error),
+          }
+        );
+      }
+
+      throw new NonRetryableProcessingError("Gemini assistant call failed", {
+        reason: error.message,
+        model: modelName,
+        provider: "gemini",
+      });
+    }
   }
 
-  return embedTextWithGemini(text);
+  throw new NonRetryableProcessingError(
+    `No available Gemini assistant model found. Tried: ${modelCandidates.join(", ")}`,
+    {
+      reason: lastModelError?.message || "Unknown model availability error",
+      triedModels: modelCandidates,
+      provider: "gemini",
+    }
+  );
+}
+
+async function generateAssistantTextWithOllama(prompt) {
+  try {
+    const result = await ollamaRequest("/api/generate", {
+      model: OLLAMA_LLM_MODEL,
+      prompt,
+      stream: false,
+      options: {
+        temperature: 0.2,
+      },
+    });
+
+    const text = parseOllamaGenerateText(result);
+    if (isBlank(text)) {
+      throw new NonRetryableProcessingError("Ollama assistant response was empty", {
+        provider: "ollama",
+      });
+    }
+
+    return text;
+  } catch (error) {
+    if (error instanceof NonRetryableProcessingError) {
+      throw error;
+    }
+
+    if (isTransientOllamaError(error)) {
+      throw new TransientProviderError(
+        `Transient error from Ollama assistant call: ${error.message}`,
+        {
+          reason: error.message,
+          model: OLLAMA_LLM_MODEL,
+          provider: "ollama",
+          retryAfterSeconds: extractRetryAfterSeconds(error),
+        }
+      );
+    }
+
+    throw new NonRetryableProcessingError("Ollama assistant call failed", {
+      reason: error.message,
+      model: OLLAMA_LLM_MODEL,
+      provider: "ollama",
+    });
+  }
+}
+
+async function generateAssistantTextWithGroq(prompt) {
+  const client = getGroqClient();
+
+  try {
+    const response = await client.chat.completions.create({
+      model: GROQ_LLM_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+    });
+
+    const text = response?.choices?.[0]?.message?.content || "";
+    if (isBlank(text)) {
+      throw new NonRetryableProcessingError("Groq assistant response was empty", {
+        provider: "groq",
+      });
+    }
+
+    return text;
+  } catch (error) {
+    if (error instanceof NonRetryableProcessingError) {
+      throw error;
+    }
+
+    if (isTransientGroqError(error)) {
+      throw new TransientProviderError(`Transient error from Groq assistant call: ${error.message}`, {
+        reason: error.message,
+        model: GROQ_LLM_MODEL,
+        provider: "groq",
+        retryAfterSeconds: extractRetryAfterSeconds(error),
+      });
+    }
+
+    throw new NonRetryableProcessingError("Groq assistant call failed", {
+      reason: error.message,
+      model: GROQ_LLM_MODEL,
+      provider: "groq",
+    });
+  }
+}
+
+export async function generateAssistantText(prompt, options = {}) {
+  const forceProvider = String(options.forceProvider || "").toLowerCase();
+  const activeProvider = forceProvider || getActiveProvider();
+
+  if (activeProvider === "groq") {
+    try {
+      return await generateAssistantTextWithGroq(prompt);
+    } catch (error) {
+      if (forceProvider === "groq") {
+        throw error;
+      }
+
+      if (error?.retryable || error?.code === "NON_RETRYABLE_PROCESSING_ERROR") {
+        return generateAssistantTextWithGemini(prompt);
+      }
+
+      throw error;
+    }
+  }
+
+  if (activeProvider === "ollama") {
+    try {
+      return await generateAssistantTextWithOllama(prompt);
+    } catch (error) {
+      if (forceProvider === "ollama") {
+        throw error;
+      }
+
+      if (error?.retryable || error?.code === "NON_RETRYABLE_PROCESSING_ERROR") {
+        return generateAssistantTextWithGemini(prompt);
+      }
+
+      throw error;
+    }
+  }
+
+  return generateAssistantTextWithGemini(prompt);
 }
 
 function sleep(ms) {

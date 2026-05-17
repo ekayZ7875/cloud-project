@@ -10,6 +10,8 @@ import {
   toggleStarFile,
   getStarredFiles,
   getRecentUploads,
+  searchFilesByTags,
+  getAllUserFileTags,
   downloadFile,
   renameFile,
   restoreFromTrash,
@@ -36,11 +38,24 @@ router.get('/:fileId/download', downloadFile)
 router.patch('/:fileId/rename', renameFile)
 router.patch('/:fileId/star', toggleStarFile)
 
-// ─── Trash ────────────────────────────────────────────────────────────────────
-router.get('/trash', getTrashedFiles)
-router.delete('/trash/empty', emptyTrash)
-router.patch('/trash/:fileId/restore', restoreFromTrash)
-router.delete('/trash/:fileId/permanent', permanentDeleteFile)
-router.delete('/:fileId', softDeleteFile)
+router.post("/upload-file", authMiddleware, upload.single("file"), uploadFile);
+router.post("/upload-folder", authMiddleware, upload.array("files"), uploadFolder);
+router.get("/get-files", authMiddleware, getUserFiles);
+router.get("/get-file", authMiddleware, getSingleFile);
+router.post("/delete-files", authMiddleware, softDeleteFile);
+router.post("/star-file", authMiddleware, toggleStarFile);
+router.get("/get-starred-files", authMiddleware, getStarredFiles);
+router.get("/get-trashed-files", authMiddleware, getTrashedFiles);
+router.get("/get-recent-files", authMiddleware, getRecentUploads);
+router.get("/search-by-tags", authMiddleware, searchFilesByTags);
+router.get("/tags", authMiddleware, getAllUserFileTags);
+router.post("/download-file", authMiddleware, downloadFile);
+router.get("/processing-status/:jobId", authMiddleware, getFileProcessingStatus);
+router.get("/storage-capacity", authMiddleware, getUserStorageCapacity);
+router.get("/get-folders", authMiddleware, getAllFoldersForUser);
+router.post("/create-folder", authMiddleware, createFolder);
+router.post("/delete-folder", authMiddleware, softDeleteFolder);
+router.post("/restore-item", authMiddleware, restoreItem);
+router.post("/permanent-delete", authMiddleware, permanentDelete);
 
 export default router

@@ -49,6 +49,12 @@ LLM provider configuration (adaptive):
 
 The worker now supports switching providers via environment variables without code changes.
 
+Supported providers:
+
+1. `gemini` (LLM + embeddings)
+2. `ollama` (LLM + embeddings)
+3. `groq` (LLM + embeddings)
+
 Ollama (local) example:
 
 ```env
@@ -66,6 +72,17 @@ AI_PROVIDER=gemini
 GEMINI_API_KEY=your_key
 GEMINI_LLM_MODEL=gemini-3-flash-preview
 GEMINI_EMBEDDING_DIMENSION=1536
+```
+
+Groq example:
+
+```env
+AI_PROVIDER=groq
+GROQ_API_KEY=your_key
+GROQ_LLM_MODEL=llama-3.3-70b-versatile
+AI_EMBEDDING_PROVIDER=groq
+GROQ_EMBEDDING_MODEL=nomic-embed-text-v1.5
+GROQ_EMBEDDING_DIMENSION=768
 ```
 
 Optional shared override:

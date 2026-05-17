@@ -4,7 +4,12 @@ import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import morgan from "morgan";
 import bodyParser from "body-parser";
-import passport from "./src/config/passport.js";
+import cors from "cors";
+import authRoutes from "./routes/auth.routes.js";
+import fileRoutes from "./routes/file.routes.js";
+import folderRoutes from "./routes/folder.routes.js";
+import aiRoutes from "./routes/ai.routes.js";
+import shareRoutes from "./routes/share.routes.js";
 import swaggerUi from "swagger-ui-express";
 import { openApiSpec } from "./docs/openapi.js";
 import logger from "./libs/logger.js";
@@ -49,25 +54,9 @@ app.use(passport.initialize());
 app.use("/auth", authRoutes);
 app.use("/api/auth", authRoutes);           // kept for backward compat if needed
 app.use("/api/files", fileRoutes);
-app.use("/api/folders", folderRoutes);
+app.use("/api/folder", folderRoutes);
+app.use("/api/ai", aiRoutes);
 app.use("/api/share", shareRoutes);
-app.use("/api/activity", activityRoutes);
-app.use("/api/search", searchRoutes);
-app.use("/api/storage", storageRoutes);
-app.use("/api/trash", trashRoutes);
-
-// ─── Docs ─────────────────────────────────────────────────────────────────────
-
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
-
-// ─── Health Check ─────────────────────────────────────────────────────────────
-
-app.get("/health", (req, res) =>
-  res.status(200).json({ success: true, message: "Chunkly AI API is running" })
-);
-app.get("/", (req, res) => res.status(200).send("OK"));
-
-// ─── 404 Handler ─────────────────────────────────────────────────────────────
 
 app.use((req, res, next) => {
   logger.warn(`Unhandled route: ${req.method} ${req.url}`);
