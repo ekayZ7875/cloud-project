@@ -19,39 +19,10 @@ export const userSignup = async (req, res) => {
       .send(errorHandler(400, "Missing Fields", "Required fields missing"));
   }
 
-  try {
-    const existingUser = await dynamoDb
-      .get({
-        TableName: "ChunklyUsers",
-        Key: { email },
-      })
-      .promise();
-
-    let user;
-    const hashUID = await argon2.hash(uid);
-
-    if (existingUser.Item) {
-      user = existingUser.Item;
-    } else {
-      user = {
-        userId: generateId("USR"),
-        email,
-        name,
-        uid: hashUID,
-        avatar: avatar || "",
-        totalFileSize: 0,
-        fileSizeAllowed: 1073741824,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      await dynamoDb
-        .put({
-          TableName: "ChunklyUsers",
-          Item: user,
-        })
-        .promise();
-    }
+  const { Item: user } = await dynamoDb.send(new GetCommand({
+    TableName: process.env.USERS_TABLE,
+    Key: { email: decoded.email },
+  }))
 
     if (!JWT_SECRET) {
       return res
@@ -97,48 +68,20 @@ export const userSignup = async (req, res) => {
       .status(500)
       .send(errorHandler(500, "Auth Failed", "Firebase login failed"));
   }
-};
 
-export const userLogin = async (req, res) => {
-  try {
-    const { email, uid } = req.body;
+  const newAccessToken = generateAccessToken(user)
 
-    if (!email || !uid) {
-      return res
-        .status(400)
-        .send(
-          errorHandler(400, "Missing Fields", "Email and UID are required")
-        );
-    }
+  res.status(200).json({ success: true, accessToken: newAccessToken })
+})
 
-    const result = await dynamoDb
-      .get({
-        TableName: USER_TABLE,
-        Key: { email },
-      })
-      .promise();
+// @desc    Logout — clear cookie and remove refresh token from DB
+// @route   POST /auth/logout
+// @access  Private
+const logout = asyncHandler(async (req, res) => {
+  const token = req.cookies?.refreshToken
 
-    const user = result.Item;
-    if (!user) {
-      return res
-        .status(400)
-        .send(errorHandler(404, "Not Found", "User Not Found"));
-    }
-
-    const passwordMatch = argon2.verify(user.uid, uid,);
-    if (!passwordMatch) {
-      return res
-        .status(400)
-        .send(
-          errorHandler(400, "Bad Request", "Please Enter Correct Password")
-        );
-    }
-
-    if (!JWT_SECRET) {
-      return res
-        .status(500)
-        .send(errorHandler(500, "Auth Config Error", "JWT secret not configured"));
-    }
+  if (token) {
+    const decoded = jwt.decode(token)
 
     const token = jwt.sign(
       {
@@ -178,4 +121,14 @@ export const userLogin = async (req, res) => {
       .status(500)
       .send(errorHandler(500, "Login Failed", "Internal server error"));
   }
-};
+
+  res.clearCookie('refreshToken', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+  })
+
+  res.status(200).json({ success: true, message: 'Logged out successfully' })
+})
+
+export { handleGoogleCallback, getMe, refreshAccessToken, logout }

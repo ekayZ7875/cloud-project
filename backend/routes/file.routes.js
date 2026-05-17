@@ -1,30 +1,42 @@
-import express from "express";
-import multer from "multer";
+import express from 'express'
+import { isAuthenticated } from '../middlewares/auth.middleware.js'
+import  upload  from '../config/multer.js'
 import {
   uploadFile,
   getUserFiles,
   getSingleFile,
   softDeleteFile,
-  toggleStarFile,
   getTrashedFiles,
+  toggleStarFile,
   getStarredFiles,
   getRecentUploads,
   searchFilesByTags,
   getAllUserFileTags,
   downloadFile,
-  getFileProcessingStatus,
-  getUserStorageCapacity,
-  getAllFoldersForUser,
-  createFolder,
-  uploadFolder,
-  softDeleteFolder,
-  restoreItem,
-  permanentDelete,
-} from "../controllers/file.controller.js";
-import authMiddleware from "../middlewares/auth.middlewares.js";
+  renameFile,
+  restoreFromTrash,
+  permanentDeleteFile,
+  emptyTrash,
+} from '../controllers/file.controller.js'
 
-const router = express.Router();
-const upload = multer();
+const router = express.Router()
+
+// All routes are protected
+router.use(isAuthenticated)
+
+// ─── Upload ───────────────────────────────────────────────────────────────────
+router.post('/upload', upload.single('file'), uploadFile)
+
+// ─── Read ─────────────────────────────────────────────────────────────────────
+router.get('/', getUserFiles)
+router.get('/starred', getStarredFiles)
+router.get('/recent', getRecentUploads)
+router.get('/:fileId', getSingleFile)
+router.get('/:fileId/download', downloadFile)
+
+// ─── Update ───────────────────────────────────────────────────────────────────
+router.patch('/:fileId/rename', renameFile)
+router.patch('/:fileId/star', toggleStarFile)
 
 router.post("/upload-file", authMiddleware, upload.single("file"), uploadFile);
 router.post("/upload-folder", authMiddleware, upload.array("files"), uploadFolder);
@@ -46,4 +58,4 @@ router.post("/delete-folder", authMiddleware, softDeleteFolder);
 router.post("/restore-item", authMiddleware, restoreItem);
 router.post("/permanent-delete", authMiddleware, permanentDelete);
 
-export default router;
+export default router

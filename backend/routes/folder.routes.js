@@ -1,19 +1,29 @@
-import express from "express";
+import express from 'express'
+import { isAuthenticated } from '../middlewares/auth.middleware.js'
 import {
   createFolder,
+  getAllFoldersForUser,
+  getFilesInFolder,
   moveFileToFolder,
   bulkMoveFilesToFolder,
-  getFilesInFolder,
-  getAllFoldersForUser,
-} from "../controllers/file.controller.js";
-import authMiddleware from "../middlewares/auth.middlewares.js";
+  renameFolder,
+  deleteFolder,
+} from '../controllers/folder.controller.js'
 
-const router = express.Router();
+const router = express.Router()
 
-router.post("/create-folder", authMiddleware, createFolder);
-router.post("/move-file-to-folder", authMiddleware, moveFileToFolder);
-router.post("/bulk-move-files", authMiddleware, bulkMoveFilesToFolder);
-router.get("/get-files", authMiddleware, getFilesInFolder);
-router.get("/get-all-folders", authMiddleware, getAllFoldersForUser);
+// All routes are protected
+router.use(isAuthenticated)
 
-export default router;
+// ─── Folders ──────────────────────────────────────────────────────────────────
+router.post('/', createFolder)
+router.get('/', getAllFoldersForUser)
+router.delete('/:folderId', deleteFolder)
+router.patch('/:folderId/rename', renameFolder)
+
+// ─── Files inside folder ──────────────────────────────────────────────────────
+router.get('/:folderId/files', getFilesInFolder)
+router.patch('/:folderId/files/bulk', bulkMoveFilesToFolder)
+router.patch('/:folderId/files/:fileId', moveFileToFolder)
+
+export default router
