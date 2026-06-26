@@ -858,73 +858,11 @@ export const openApiSpec = {
         },
       },
     },
-    "/api/shared/by-me": {
-      get: {
-        tags: ["Share"],
-        summary: "Get files shared by the authenticated user",
-        security: [{ bearerAuth: [] }],
-        responses: {
-          200: {
-            description: "Shared-by-me files fetched",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    success: { type: "boolean" },
-                    files: {
-                      type: "array",
-                      items: { type: "object", additionalProperties: true },
-                    },
-                  },
-                },
-              },
-            },
-          },
-          500: { description: "Internal server error" },
-        },
-      },
-    },
-    "/api/shared/with-me": {
-      get: {
-        tags: ["Share"],
-        summary: "Get files shared with the authenticated user",
-        security: [{ bearerAuth: [] }],
-        responses: {
-          200: {
-            description: "Shared-with-me files fetched",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    success: { type: "boolean" },
-                    files: {
-                      type: "array",
-                      items: { type: "object", additionalProperties: true },
-                    },
-                  },
-                },
-              },
-            },
-          },
-          500: { description: "Internal server error" },
-        },
-      },
-    },
-    "/api/shared/{fileId}": {
+    "/api/share/create": {
       post: {
         tags: ["Share"],
-        summary: "Share a file with another user",
+        summary: "Create or update a file share",
         security: [{ bearerAuth: [] }],
-        parameters: [
-          {
-            in: "path",
-            name: "fileId",
-            required: true,
-            schema: { type: "string" },
-          },
-        ],
         requestBody: {
           required: true,
           content: {
@@ -932,45 +870,163 @@ export const openApiSpec = {
               schema: {
                 type: "object",
                 properties: {
-                  sharedWithEmail: { type: "string", format: "email" },
+                  fileId: { type: "string" },
+                  recipientEmail: { type: "string", format: "email" },
+                  permission: { type: "string", enum: ["VIEW", "COMMENT", "EDIT"], default: "VIEW" },
+                  expiresAt: { type: "string", format: "date-time" },
+                  emailNotification: { type: "boolean", default: true }
                 },
-                required: ["sharedWithEmail"],
-              },
-            },
-          },
+                required: ["fileId", "recipientEmail"]
+              }
+            }
+          }
         },
         responses: {
-          201: { description: "File shared" },
-          400: { description: "Invalid request" },
+          201: { description: "File shared or updated successfully" },
+          400: { description: "Invalid request payload" },
           404: { description: "File not found" },
-          409: { description: "Already shared" },
-          500: { description: "Internal server error" },
-        },
-      },
-      delete: {
+          500: { description: "Internal server error" }
+        }
+      }
+    },
+    "/api/share/revoke": {
+      post: {
         tags: ["Share"],
-        summary: "Revoke a user's access to a file",
+        summary: "Revoke a file share",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  shareId: { type: "string" }
+                },
+                required: ["shareId"]
+              }
+            }
+          }
+        },
+        responses: {
+          200: { description: "Share revoked successfully" },
+          404: { description: "Share not found" },
+          500: { description: "Internal server error" }
+        }
+      }
+    },
+    "/api/share/file": {
+      get: {
+        tags: ["Share"],
+        summary: "List all shares for a specific file",
         security: [{ bearerAuth: [] }],
         parameters: [
           {
-            in: "path",
+            in: "query",
             name: "fileId",
             required: true,
-            schema: { type: "string" },
-          },
-          {
-            in: "path",
-            name: "sharedWithEmail",
-            required: true,
-            schema: { type: "string", format: "email" },
-          },
+            schema: { type: "string" }
+          }
         ],
         responses: {
-          200: { description: "Access revoked" },
-          404: { description: "Share record not found" },
-          500: { description: "Internal server error" },
+          200: { description: "Shares fetched successfully" },
+          400: { description: "Invalid fileId" },
+          500: { description: "Internal server error" }
+        }
+      }
+    },
+    "/api/share/shared-with-me": {
+      get: {
+        tags: ["Share"],
+        summary: "List files shared with the current user",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Shared files fetched successfully" },
+          500: { description: "Internal server error" }
+        }
+      }
+    },
+    "/api/share/permission": {
+      patch: {
+        tags: ["Share"],
+        summary: "Update permission level for a share",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  shareId: { type: "string" },
+                  permission: { type: "string", enum: ["VIEW", "COMMENT", "EDIT"] }
+                },
+                required: ["shareId", "permission"]
+              }
+            }
+          }
         },
-      },
+        responses: {
+          200: { description: "Share permission updated" },
+          400: { description: "Invalid request payload" },
+          404: { description: "Share not found" },
+          500: { description: "Internal server error" }
+        }
+      }
+    },
+    "/api/share/accept": {
+      post: {
+        tags: ["Share"],
+        summary: "Accept a file share invitation",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  shareId: { type: "string" }
+                },
+                required: ["shareId"]
+              }
+            }
+          }
+        },
+        responses: {
+          200: { description: "Share accepted" },
+          403: { description: "Not allowed to accept this share" },
+          404: { description: "Share not found" },
+          500: { description: "Internal server error" }
+        }
+      }
+    },
+    "/api/share/decline": {
+      post: {
+        tags: ["Share"],
+        summary: "Decline a file share invitation",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  shareId: { type: "string" }
+                },
+                required: ["shareId"]
+              }
+            }
+          }
+        },
+        responses: {
+          200: { description: "Share declined" },
+          403: { description: "Not allowed to decline this share" },
+          404: { description: "Share not found" },
+          500: { description: "Internal server error" }
+        }
+      }
     },
     "/api/search": {
       get: {

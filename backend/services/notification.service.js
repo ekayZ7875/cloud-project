@@ -1,5 +1,7 @@
 import AWS from "aws-sdk";
 import dotenv from "dotenv";
+import nodemailer from "nodemailer";
+import { getShareNotificationHtml } from "../utils/emailTemplates.js";
 
 dotenv.config();
 
@@ -9,14 +11,17 @@ const sqs = new AWS.SQS({
   secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || process.env.AWS_SECRET_KEY,
 });
 
-const ses = new AWS.SES({
-  region: process.env.AWS_REGION,
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || process.env.AWS_SECRET_KEY,
-});
-
 const SHARE_NOTIFICATION_QUEUE_URL = process.env.SHARE_NOTIFICATION_QUEUE_URL;
 const NOTIFICATION_FROM_EMAIL = process.env.NOTIFICATION_FROM_EMAIL;
+
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.SMTP_GMAIL_USER || process.env.NOTIFICATION_FROM_EMAIL,
+    pass: process.env.SMTP_GMAIL_APP_PASS,
+  },
+});
+
 
 export async function publishShareNotificationJob(payload) {
   if (!SHARE_NOTIFICATION_QUEUE_URL) {
@@ -44,34 +49,30 @@ export async function sendShareNotificationEmail({
   permission,
   dashboardUrl,
 }) {
-  if (!NOTIFICATION_FROM_EMAIL) {
-    throw new Error("NOTIFICATION_FROM_EMAIL is not configured");
+  const fromEmail = process.env.SMTP_GMAIL_USER || process.env.NOTIFICATION_FROM_EMAIL;
+  if (!fromEmail) {
+    throw new Error("SMTP_GMAIL_USER or NOTIFICATION_FROM_EMAIL is not configured");
+  }
+  if (!process.env.SMTP_GMAIL_APP_PASS) {
+    throw new Error("SMTP_GMAIL_APP_PASS is not configured");
   }
 
   const safeOwner = ownerName || "Someone";
   const safeFile = fileName || "a file";
 
-  await ses
-    .sendEmail({
-      Source: NOTIFICATION_FROM_EMAIL,
-      Destination: {
-        ToAddresses: [recipientEmail],
-      },
-      Message: {
-        Subject: {
-          Data: `${safeOwner} shared ${safeFile} with you`,
-        },
-        Body: {
-          Html: {
-            Data: `
-              <h2>File shared with you</h2>
-              <p><strong>${safeOwner}</strong> shared <strong>${safeFile}</strong> with permission <strong>${permission}</strong>.</p>
-              <p>Open your Shared tab to access the file.</p>
-              <p><a href="${dashboardUrl}">Open dashboard</a></p>
-            `,
-          },
-        },
-      },
-    })
-    .promise();
+  const emailHtml = getShareNotificationHtml({
+    ownerName: safeOwner,
+    fileName: safeFile,
+    permission,
+    dashboardUrl,
+  });
+
+  await transporter.sendMail({
+    from: `"Chunkly" <${fromEmail}>`,
+    to: recipientEmail,
+    subject: `${safeOwner} shared ${safeFile} with you`,
+    html: emailHtml,
+  });
 }
+
+
