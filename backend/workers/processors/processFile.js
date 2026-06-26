@@ -1,4 +1,4 @@
-import { analyzeDocumentWithRetry, embedText } from "../../services/gemini.service.js";
+import { analyzeDocumentWithRetry, embedText, embedTextBatch } from "../../services/gemini.service.js";
 import { extractText } from "../../services/extractText.service.js";
 import { upsertChunks } from "../../services/qdrant.service.js";
 import logger from "../../libs/logger.js";
@@ -97,16 +97,17 @@ export async function processFile(jobMessage) {
       `[PIPELINE] job=${jobId} stage=analyzeDocument done chunks=${analyzed.embedding_chunks.length}`
     );
 
-    const chunksWithVectors = [];
-    for (const chunk of analyzed.embedding_chunks) {
-      const vector = await runWithTimeout(`embedText:${chunk.chunk_id}`, () =>
-        embedText(chunk.text)
-      );
-      chunksWithVectors.push({
-        ...chunk,
-        vector,
-      });
-    }
+    const textsToEmbed = analyzed.embedding_chunks.map((chunk) => chunk.text);
+    
+    logger.info(`[PIPELINE] job=${jobId} stage=embedText start chunks=${textsToEmbed.length}`);
+    const vectors = await runWithTimeout(`embedTextBatch`, () =>
+      embedTextBatch(textsToEmbed)
+    );
+    
+    const chunksWithVectors = analyzed.embedding_chunks.map((chunk, index) => ({
+      ...chunk,
+      vector: vectors[index],
+    }));
 
     logger.info(
       `[PIPELINE] job=${jobId} stage=embedText done vectors=${chunksWithVectors.length}`

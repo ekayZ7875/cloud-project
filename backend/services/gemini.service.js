@@ -573,6 +573,54 @@ export async function embedText(text, options = {}) {
   return embedTextWithGemini(text);
 }
 
+export async function embedTextBatch(texts, options = {}) {
+  if (!Array.isArray(texts) || texts.length === 0) {
+    return [];
+  }
+
+  const client = getGeminiClient();
+  const modelName = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001";
+  const model = client.getGenerativeModel({ model: modelName });
+
+  try {
+    const requests = texts.map((text) => ({
+      content: { role: "user", parts: [{ text }] },
+      outputDimensionality: EMBEDDING_DIMENSION,
+    }));
+
+    const result = await model.batchEmbedContents({ requests });
+    const embeddings = result?.embeddings;
+    if (!embeddings || embeddings.length !== texts.length) {
+      throw new Error("No embedding in Gemini response or dimension mismatch");
+    }
+
+    return embeddings.map((e) => normalizeVector(e.values));
+  } catch (error) {
+    if (error instanceof NonRetryableProcessingError) {
+      throw error;
+    }
+
+    if (isTransientGeminiError(error)) {
+      throw new TransientProviderError(
+        `Transient error from Gemini batch embedding call: ${error.message}`,
+        {
+          reason: error.message,
+          model: modelName,
+          provider: "gemini",
+          retryAfterSeconds: extractRetryAfterSeconds(error),
+        }
+      );
+    }
+
+    throw new NonRetryableProcessingError(`Gemini batch embedding call failed: ${error.message}`, {
+      reason: error.message,
+      provider: "gemini",
+      model: modelName,
+    });
+  }
+}
+
+
 async function generateAssistantTextWithGemini(prompt) {
   const client = getGeminiClient();
   const modelCandidates = getGeminiModelCandidates();

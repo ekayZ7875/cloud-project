@@ -5,6 +5,7 @@ import { NonRetryableProcessingError } from "./errors/pipeline.errors.js";
 const textract = new AWS.Textract();
 
 const OCR_FILE_EXTENSIONS = new Set([".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"]);
+const IMAGE_FILE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"]);
 const TEXT_FILE_EXTENSIONS = new Set([
   ".txt",
   ".md",
@@ -172,9 +173,50 @@ async function extractTextWithTextract(bucket, key) {
   return text;
 }
 
+async function extractTextWithTextractSync(bucket, key) {
+  try {
+    const result = await textract
+      .detectDocumentText({
+        Document: {
+          S3Object: {
+            Bucket: bucket,
+            Name: key,
+          },
+        },
+      })
+      .promise();
+
+    const lines = collectTextractLines(result.Blocks);
+    const text = lines.join("\n").trim();
+    if (!text) {
+      throw new NonRetryableProcessingError("Textract returned no readable text", {
+        bucket,
+        key,
+        provider: "textract",
+      });
+    }
+
+    return text;
+  } catch (error) {
+    if (error instanceof NonRetryableProcessingError) {
+      throw error;
+    }
+    throw new NonRetryableProcessingError(`Textract sync detect failed: ${error.message}`, {
+      bucket,
+      key,
+      provider: "textract",
+      reason: error.message,
+    });
+  }
+}
+
 export async function extractText(s3Url) {
   const { bucket, key } = parseS3Url(s3Url);
   const extension = getFileExtension(key);
+
+  if (IMAGE_FILE_EXTENSIONS.has(extension)) {
+    return extractTextWithTextractSync(bucket, key);
+  }
 
   if (OCR_FILE_EXTENSIONS.has(extension)) {
     return extractTextWithTextract(bucket, key);
