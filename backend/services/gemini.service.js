@@ -1,21 +1,12 @@
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import Groq from "groq-sdk";
-import { BedrockRuntime } from "@aws-sdk/client-bedrock-runtime";
 import {
   AI_EMBEDDING_PROVIDER,
   AI_PROVIDER,
   CHUNK_CONSTRAINTS,
   EMBEDDING_DIMENSION,
-  GROQ_LLM_MODEL,
   LLM_MODEL,
-  OLLAMA_BASE_URL,
-  OLLAMA_EMBEDDING_MODEL,
-  OLLAMA_LLM_MODEL,
-  OLLAMA_TIMEOUT_MS,
   RETRY_POLICY,
-  BEDROCK_EMBEDDING_MODEL,
-  BEDROCK_EMBEDDING_DIMENSION,
 } from "../constants/pipeline.constants.js";
 import {
   InvalidLlmJsonError,
@@ -23,16 +14,14 @@ import {
   NonRetryableProcessingError,
 } from "./errors/pipeline.errors.js";
 import { validateFileUnderstandingPayload } from "../validators/fileUnderstanding.validator.js";
+import logger from "../libs/logger.js";
 
 dotenv.config();
 
 const FALLBACK_LLM_MODELS = ["gemini-3-flash-preview"];
-const SUPPORTED_PROVIDERS = new Set(["gemini", "ollama", "groq"]);
 const GEMINI_ANALYZE_MAX_CHARS = Number(process.env.GEMINI_ANALYZE_MAX_CHARS || 20000);
-const OLLAMA_ANALYZE_MAX_CHARS = Number(process.env.OLLAMA_ANALYZE_MAX_CHARS || 12000);
-const OLLAMA_EMBED_MAX_CHARS = Number(process.env.OLLAMA_EMBED_MAX_CHARS || 6000);
 
-const LLM_PROMPT_TEMPLATE =`You are an elite AI document intelligence and indexing engine with expertise in structured information extraction, semantic chunking, and metadata classification.
+const LLM_PROMPT_TEMPLATE = `You are an elite AI document intelligence and indexing engine with expertise in structured information extraction, semantic chunking, and metadata classification.
 
 Your task is to deeply analyze the provided document and return a STRICT JSON response. The JSON must be syntactically valid, complete, and contain no hallucinated or fabricated information. Every field must be populated based solely on what is explicitly stated or clearly implied in the document.
 
@@ -104,7 +93,7 @@ Document:
 
 function getActiveProvider() {
   const provider = String(AI_PROVIDER || "gemini").toLowerCase();
-  return SUPPORTED_PROVIDERS.has(provider) ? provider : "gemini";
+  return provider === "gemini" ? "gemini" : "gemini";
 }
 
 function getGeminiClient() {
@@ -114,15 +103,6 @@ function getGeminiClient() {
   }
 
   return new GoogleGenerativeAI(apiKey);
-}
-
-function getGroqClient() {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
-    throw new NonRetryableProcessingError("GROQ_API_KEY is not configured");
-  }
-
-  return new Groq({ apiKey });
 }
 
 function parseJsonFromModelText(modelText) {
@@ -199,37 +179,6 @@ function isTransientGeminiError(error) {
   );
 }
 
-function isTransientOllamaError(error) {
-  const message = (error?.message || "").toLowerCase();
-  const status = Number(error?.status || error?.code || 0);
-
-  return (
-    [408, 429, 500, 502, 503, 504].includes(status) ||
-    message.includes("timeout") ||
-    message.includes("temporar") ||
-    message.includes("rate") ||
-    message.includes("unavailable") ||
-    message.includes("network") ||
-    message.includes("fetch failed") ||
-    message.includes("econnrefused") ||
-    message.includes("socket")
-  );
-}
-
-function isTransientGroqError(error) {
-  const message = (error?.message || "").toLowerCase();
-  const status = Number(error?.status || error?.code || 0);
-
-  return (
-    [408, 429, 500, 502, 503, 504].includes(status) ||
-    message.includes("timeout") ||
-    message.includes("temporar") ||
-    message.includes("rate") ||
-    message.includes("unavailable") ||
-    message.includes("network")
-  );
-}
-
 function isModelNotFoundError(error) {
   const message = (error?.message || "").toLowerCase();
   const status = Number(error?.status || error?.code || 0);
@@ -243,6 +192,34 @@ function isModelNotFoundError(error) {
 
 function extractRetryAfterSeconds(error) {
   const message = error?.message || "";
+
+  const retryAfterHeader =
+    error?.$response?.headers?.["retry-after"] ||
+    error?.$response?.headers?.["Retry-After"] ||
+    error?.response?.headers?.["retry-after"] ||
+    error?.response?.headers?.["Retry-After"] ||
+    error?.$metadata?.httpHeaders?.["retry-after"] ||
+    error?.$metadata?.httpHeaders?.["Retry-After"] ||
+    error?.headers?.["retry-after"] ||
+    error?.headers?.["Retry-After"];
+
+  const numericRetryAfter = Number(error?.RetryAfterSeconds || error?.retryAfterSeconds);
+  if (Number.isFinite(numericRetryAfter) && numericRetryAfter > 0) {
+    return Math.ceil(numericRetryAfter);
+  }
+
+  if (typeof retryAfterHeader === "string" && retryAfterHeader.trim()) {
+    const headerValue = retryAfterHeader.trim();
+    const seconds = Number(headerValue);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return Math.ceil(seconds);
+    }
+
+    const retryAfterDate = Date.parse(headerValue);
+    if (Number.isFinite(retryAfterDate)) {
+      return Math.max(1, Math.ceil((retryAfterDate - Date.now()) / 1000));
+    }
+  }
 
   const retryInMatch = message.match(/retry in\s+([0-9.]+)s/i);
   if (retryInMatch) {
@@ -395,72 +372,8 @@ function buildFallbackPayload(documentText) {
   return validateFileUnderstandingPayload(payload);
 }
 
-function createAnalyzeInputCandidates(documentText) {
-  const cleaned = (documentText || "").replace(/\s+/g, " ").trim();
-  if (!cleaned) {
-    return [];
-  }
-
-  const maxChars = Math.max(2000, OLLAMA_ANALYZE_MAX_CHARS);
-  const limits = [maxChars, Math.floor(maxChars * 0.66), Math.floor(maxChars * 0.4), 4000, 2000];
-  const candidates = [];
-
-  for (const limit of limits) {
-    const safeLimit = Math.max(1000, limit);
-    if (cleaned.length <= safeLimit) {
-      candidates.push(cleaned);
-      continue;
-    }
-
-    const sliced = cleaned.slice(0, safeLimit);
-    const boundary = sliced.lastIndexOf(" ");
-    candidates.push((boundary > 0 ? sliced.slice(0, boundary) : sliced).trim());
-  }
-
-  return [...new Set(candidates.filter(Boolean))];
-}
-
 function isModelOutputValidationError(error) {
   return error instanceof InvalidLlmJsonError || String(error?.name || "") === "ZodError";
-}
-
-function createEmbeddingInputCandidates(text) {
-  const cleaned = (text || "").replace(/\s+/g, " ").trim();
-  if (!cleaned) {
-    return [];
-  }
-
-  const maxChars = Math.max(500, OLLAMA_EMBED_MAX_CHARS);
-  const limits = [maxChars, Math.floor(maxChars * 0.66), Math.floor(maxChars * 0.4), 1000];
-  const candidates = [];
-
-  for (const limit of limits) {
-    const safeLimit = Math.max(500, limit);
-    if (cleaned.length <= safeLimit) {
-      candidates.push(cleaned);
-      continue;
-    }
-
-    const sliced = cleaned.slice(0, safeLimit);
-    const boundary = sliced.lastIndexOf(" ");
-    candidates.push((boundary > 0 ? sliced.slice(0, boundary) : sliced).trim());
-  }
-
-  return [...new Set(candidates.filter(Boolean))];
-}
-
-function isOllamaContextLengthError(error) {
-  const message = String(error?.message || "").toLowerCase();
-  return (
-    message.includes("input length exceeds") ||
-    message.includes("context length") ||
-    message.includes("prompt is too long")
-  );
-}
-
-function isGroqContextLengthError(error) {
-  const message = String(error?.message || "").toLowerCase();
-  return message.includes("context") || message.includes("maximum context length");
 }
 
 async function generateStructuredJsonText(model, prompt) {
@@ -488,174 +401,12 @@ async function generateStructuredJsonText(model, prompt) {
   }
 }
 
-async function generateStructuredJsonTextWithGroq(prompt) {
-  const client = getGroqClient();
-
-  try {
-    const response = await client.chat.completions.create({
-      model: GROQ_LLM_MODEL,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-    });
-
-    return response?.choices?.[0]?.message?.content || "";
-  } catch (error) {
-    if (!String(error?.message || "").toLowerCase().includes("response_format")) {
-      throw error;
-    }
-
-    const response = await client.chat.completions.create({
-      model: GROQ_LLM_MODEL,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.2,
-    });
-
-    return response?.choices?.[0]?.message?.content || "";
-  }
-}
-
-async function ollamaRequest(path, payload) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(`${OLLAMA_BASE_URL}${path}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-
-    const rawBody = await response.text();
-
-    if (!response.ok) {
-      const error = new Error(
-        `Ollama request failed with status ${response.status}: ${rawBody.slice(0, 300)}`
-      );
-      error.status = response.status;
-      throw error;
-    }
-
-    try {
-      return JSON.parse(rawBody);
-    } catch {
-      throw new InvalidLlmJsonError("Ollama returned non-JSON HTTP body", {
-        responsePreview: rawBody.slice(0, 300),
-      });
-    }
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      const timeoutError = new Error(`Ollama request timed out after ${OLLAMA_TIMEOUT_MS}ms`);
-      timeoutError.status = 408;
-      throw timeoutError;
-    }
-
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-function parseOllamaGenerateText(result) {
-  return result?.response || result?.message?.content || "";
-}
-
 function isBlank(value) {
   return !String(value || "").trim();
 }
 
 function normalizeWhitespace(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
-}
-
-function isLikelyExtractiveSummary(summary, sourceText) {
-  const normalizedSummary = normalizeWhitespace(summary).toLowerCase();
-  const normalizedSource = normalizeWhitespace(sourceText).toLowerCase();
-
-  if (!normalizedSummary || !normalizedSource) {
-    return false;
-  }
-
-  if (normalizedSummary.length >= 60 && normalizedSource.includes(normalizedSummary)) {
-    return true;
-  }
-
-  const summaryTokens = new Set(normalizedSummary.split(" ").filter(Boolean));
-  const sourceTokens = new Set(normalizedSource.split(" ").filter(Boolean));
-  const overlap = [...summaryTokens].filter((token) => sourceTokens.has(token)).length;
-  const overlapRatio = summaryTokens.size ? overlap / summaryTokens.size : 0;
-
-  return summaryTokens.size >= 12 && overlapRatio >= 0.92;
-}
-
-function buildNarrativeSummaryPrompt(documentText, previousSummary = "") {
-  return `You are a document understanding assistant.
-Write a human-readable summary explaining what this document is saying.
-
-Rules:
-- 4-6 short sentences.
-- Explain meaning, purpose, and key details.
-- Prefer interpretation over raw OCR copy.
-- If this is an identity/government card, mention holder name, document type, important numbers (masked except last 4), and dates if present.
-- If any field is unclear, say "not clearly readable".
-- Return plain text only.
-
-Current summary (if any):
-${previousSummary || "N/A"}
-
-Document OCR text:
-${documentText}`;
-}
-
-function maskLikelyIdNumbers(text) {
-  return String(text || "").replace(/\b([A-Z0-9]{2,})([A-Z0-9]{4})\b/g, (_, head, tail) => {
-    if (head.length <= 2) {
-      return `${head}${tail}`;
-    }
-
-    return `${"*".repeat(head.length)}${tail}`;
-  });
-}
-
-async function generateNarrativeSummaryWithOllama(documentText, previousSummary = "") {
-  const sourceText = normalizeWhitespace(documentText).slice(0, 3000);
-  if (!sourceText) {
-    return normalizeWhitespace(previousSummary);
-  }
-
-  const prompt = buildNarrativeSummaryPrompt(sourceText, normalizeWhitespace(previousSummary));
-  const result = await ollamaRequest("/api/generate", {
-    model: OLLAMA_LLM_MODEL,
-    prompt,
-    stream: false,
-    options: { temperature: 0.15 },
-  });
-
-  const rewritten = normalizeWhitespace(parseOllamaGenerateText(result));
-  if (!rewritten) {
-    throw new Error("Ollama summary rewrite returned empty text");
-  }
-
-  return maskLikelyIdNumbers(rewritten).slice(0, 1200);
-}
-
-async function improveSummaryIfNeeded(documentText, summary) {
-  const baseline = normalizeWhitespace(summary);
-  const shouldRewrite = !baseline || isLikelyExtractiveSummary(baseline, documentText);
-
-  if (!shouldRewrite) {
-    return baseline;
-  }
-
-  try {
-    const rewritten = await generateNarrativeSummaryWithOllama(documentText, baseline);
-    return rewritten || baseline;
-  } catch {
-    return baseline;
-  }
 }
 
 function normalizeVector(rawVector) {
@@ -694,11 +445,9 @@ async function analyzeDocumentRawWithGemini(documentText) {
       const responseText = await generateStructuredJsonText(model, prompt);
       const parsed = parseJsonFromModelText(responseText);
       const validated = validateFileUnderstandingPayload(parsed);
-      const improvedSummary = await improveSummaryIfNeeded(documentText, validated.summary);
 
       return {
         ...validated,
-        summary: improvedSummary || validated.summary,
         embedding_chunks: buildReliableEmbeddingChunks(documentText, validated.embedding_chunks),
       };
     } catch (error) {
@@ -742,298 +491,7 @@ async function analyzeDocumentRawWithGemini(documentText) {
   );
 }
 
-async function analyzeDocumentRawWithOllama(documentText) {
-  if (!documentText || !documentText.trim()) {
-    throw new NonRetryableProcessingError("Document text is empty");
-  }
-
-  const analyzeCandidates = createAnalyzeInputCandidates(trimDocumentForAnalyze(documentText));
-
-  let lastError = null;
-
-  for (const candidateText of analyzeCandidates) {
-    const prompt = buildPrompt(candidateText);
-    const attempts = [
-      {
-        model: OLLAMA_LLM_MODEL,
-        prompt,
-        stream: false,
-        format: "json",
-        options: { temperature: 0.2 },
-      },
-      {
-        model: OLLAMA_LLM_MODEL,
-        prompt,
-        stream: false,
-        options: { temperature: 0.2 },
-      },
-    ];
-
-    for (const payload of attempts) {
-      try {
-        const result = await ollamaRequest("/api/generate", payload);
-        const parsed = parseJsonFromModelText(parseOllamaGenerateText(result));
-        const validated = validateFileUnderstandingPayload(parsed);
-        const improvedSummary = await improveSummaryIfNeeded(candidateText, validated.summary);
-
-        return {
-          ...validated,
-          summary: improvedSummary || validated.summary,
-          embedding_chunks: buildReliableEmbeddingChunks(documentText, validated.embedding_chunks),
-        };
-      } catch (error) {
-        lastError = error;
-
-        if (isTransientOllamaError(error)) {
-          throw new TransientProviderError(
-            `Transient error from Ollama analyze call: ${error.message}`,
-            {
-              reason: error.message,
-              model: OLLAMA_LLM_MODEL,
-              provider: "ollama",
-              retryAfterSeconds: extractRetryAfterSeconds(error),
-            }
-          );
-        }
-
-        if (isOllamaContextLengthError(error) || isModelOutputValidationError(error)) {
-          continue;
-        }
-      }
-    }
-  }
-
-  if (isModelOutputValidationError(lastError) || isOllamaContextLengthError(lastError)) {
-    const fallbackPayload = buildFallbackPayload(documentText);
-    const improvedSummary = await improveSummaryIfNeeded(
-      trimDocumentForAnalyze(documentText),
-      fallbackPayload.summary
-    );
-
-    return {
-      ...fallbackPayload,
-      summary: improvedSummary || fallbackPayload.summary,
-    };
-  }
-
-  throw new NonRetryableProcessingError(
-    `Ollama analyze call failed: ${lastError?.message || "Unknown Ollama analyze error"}`,
-    {
-    reason: lastError?.message || "Unknown Ollama analyze error",
-    model: OLLAMA_LLM_MODEL,
-    provider: "ollama",
-    }
-  );
-}
-
-async function analyzeDocumentRawWithGroq(documentText) {
-  if (!documentText || !documentText.trim()) {
-    throw new NonRetryableProcessingError("Document text is empty");
-  }
-
-  const analyzeCandidates = createAnalyzeInputCandidates(trimDocumentForAnalyze(documentText));
-  let lastError = null;
-
-  for (const candidateText of analyzeCandidates) {
-    const prompt = buildPrompt(candidateText);
-
-    try {
-      const responseText = await generateStructuredJsonTextWithGroq(prompt);
-      const parsed = parseJsonFromModelText(responseText);
-      const validated = validateFileUnderstandingPayload(parsed);
-      const improvedSummary = await improveSummaryIfNeeded(candidateText, validated.summary);
-
-      return {
-        ...validated,
-        summary: improvedSummary || validated.summary,
-        embedding_chunks: buildReliableEmbeddingChunks(documentText, validated.embedding_chunks),
-      };
-    } catch (error) {
-      lastError = error;
-
-      if (isTransientGroqError(error)) {
-        throw new TransientProviderError(`Transient error from Groq analyze call: ${error.message}`, {
-          reason: error.message,
-          model: GROQ_LLM_MODEL,
-          provider: "groq",
-          retryAfterSeconds: extractRetryAfterSeconds(error),
-        });
-      }
-
-      if (isGroqContextLengthError(error) || isModelOutputValidationError(error)) {
-        continue;
-      }
-
-      throw new NonRetryableProcessingError("Groq analyze call failed", {
-        reason: error.message,
-        model: GROQ_LLM_MODEL,
-        provider: "groq",
-      });
-    }
-  }
-
-  if (isModelOutputValidationError(lastError) || isGroqContextLengthError(lastError)) {
-    const fallbackPayload = buildFallbackPayload(documentText);
-    const improvedSummary = await improveSummaryIfNeeded(
-      trimDocumentForAnalyze(documentText),
-      fallbackPayload.summary
-    );
-
-    return {
-      ...fallbackPayload,
-      summary: improvedSummary || fallbackPayload.summary,
-    };
-  }
-
-  throw new NonRetryableProcessingError(
-    `Groq analyze call failed: ${lastError?.message || "Unknown Groq analyze error"}`,
-    {
-      reason: lastError?.message || "Unknown Groq analyze error",
-      model: GROQ_LLM_MODEL,
-      provider: "groq",
-    }
-  );
-}
-
-async function embedTextWithBedrock(text) {
-  if (!text || !text.trim()) {
-    throw new NonRetryableProcessingError("Cannot embed empty text");
-  }
-
-  const region = process.env.AWS_REGION || "us-east-1";
-  const client = new BedrockRuntime({ region });
-  const modelId = BEDROCK_EMBEDDING_MODEL || "amazon.titan-embed-text-v2:0";
-
-  try {
-    const response = await client.invokeModel({
-      modelId,
-      contentType: "application/json",
-      accept: "application/json",
-      body: JSON.stringify({ inputText: text }),
-    });
-
-    const responseBody = JSON.parse(new TextDecoder().decode(response.body));
-    const embedding = responseBody?.embedding;
-
-    if (!embedding) {
-      throw new Error("No embedding in Bedrock response");
-    }
-
-    return normalizeVector(embedding);
-  } catch (error) {
-    if (error instanceof NonRetryableProcessingError) {
-      throw error;
-    }
-
-    // Transient errors from Bedrock
-    if (
-      error?.name === "ThrottlingException" ||
-      error?.name === "ServiceUnavailableException" ||
-      error?.Code === "ThrottlingException" ||
-      error?.Code === "ServiceUnavailableException"
-    ) {
-      throw new TransientProviderError(
-        `Transient error from AWS Bedrock embedding call: ${error.message}`,
-        {
-          reason: error.message,
-          model: modelId,
-          provider: "bedrock",
-          retryAfterSeconds: error?.RetryAfterSeconds || 10,
-        }
-      );
-    }
-
-    throw new NonRetryableProcessingError("AWS Bedrock embedding call failed", {
-      reason: error.message,
-      model: modelId,
-      provider: "bedrock",
-    });
-  }
-}
-
-async function embedTextWithOllama(text) {
-  if (!text || !text.trim()) {
-    throw new NonRetryableProcessingError("Cannot embed empty text");
-  }
-
-  const candidates = createEmbeddingInputCandidates(text);
-  let lastError;
-
-  for (const candidateText of candidates) {
-    try {
-      let result;
-      try {
-        result = await ollamaRequest("/api/embed", {
-          model: EMBEDDING_MODEL,
-          input: candidateText,
-          truncate: true,
-        });
-      } catch (primaryError) {
-        if (Number(primaryError?.status || 0) !== 404) {
-          throw primaryError;
-        }
-
-        // Backward compatibility for older Ollama versions.
-        result = await ollamaRequest("/api/embeddings", {
-          model: EMBEDDING_MODEL,
-          prompt: candidateText,
-          truncate: true,
-        });
-      }
-
-      const rawVector = Array.isArray(result?.embeddings) ? result.embeddings[0] : result?.embedding;
-      return normalizeVector(rawVector);
-    } catch (error) {
-      lastError = error;
-
-      if (isOllamaContextLengthError(error)) {
-        continue;
-      }
-
-      if (error instanceof NonRetryableProcessingError) {
-        throw error;
-      }
-
-      if (isTransientOllamaError(error)) {
-        throw new TransientProviderError(
-          `Transient error from Ollama embedding call: ${error.message}`,
-          {
-            reason: error.message,
-            model: EMBEDDING_MODEL,
-            provider: "ollama",
-            retryAfterSeconds: extractRetryAfterSeconds(error),
-          }
-        );
-      }
-
-      throw new NonRetryableProcessingError(`Ollama embedding call failed: ${error.message}`, {
-        reason: error.message,
-        provider: "ollama",
-      });
-    }
-  }
-
-  throw new NonRetryableProcessingError(
-    `Ollama embedding call failed: ${lastError?.message || "Embedding candidates exhausted"}`,
-    {
-      reason: lastError?.message,
-      provider: "ollama",
-    }
-  );
-}
-
-
 export async function analyzeDocumentRaw(documentText, options = {}) {
-  const forceProvider = String(options.forceProvider || "").toLowerCase();
-  const provider = forceProvider || getActiveProvider();
-  if (provider === "ollama") {
-    return analyzeDocumentRawWithOllama(documentText);
-  }
-
-  if (provider === "groq") {
-    return analyzeDocumentRawWithGroq(documentText);
-  }
-
   return analyzeDocumentRawWithGemini(documentText);
 }
 
@@ -1065,15 +523,54 @@ export async function analyzeDocumentWithRetry(
   throw lastError;
 }
 
-export async function embedText(text, options = {}) {
-  const forceProvider = String(options.forceProvider || "").toLowerCase();
-  const provider = forceProvider || AI_EMBEDDING_PROVIDER;
-  
-  if (provider === "bedrock") {
-    return embedTextWithBedrock(text);
+async function embedTextWithGemini(text) {
+  if (!text || !text.trim()) {
+    throw new NonRetryableProcessingError("Cannot embed empty text");
   }
-  
-  return embedTextWithOllama(text);
+
+  const client = getGeminiClient();
+  const modelName = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001";
+  const model = client.getGenerativeModel({ model: modelName });
+
+  try {
+    const result = await model.embedContent({
+      content: { role: "user", parts: [{ text }] },
+      outputDimensionality: EMBEDDING_DIMENSION,
+    });
+
+    const embedding = result?.embedding?.values;
+    if (!embedding) {
+      throw new Error("No embedding in Gemini response");
+    }
+
+    return normalizeVector(embedding);
+  } catch (error) {
+    if (error instanceof NonRetryableProcessingError) {
+      throw error;
+    }
+
+    if (isTransientGeminiError(error)) {
+      throw new TransientProviderError(
+        `Transient error from Gemini embedding call: ${error.message}`,
+        {
+          reason: error.message,
+          model: modelName,
+          provider: "gemini",
+          retryAfterSeconds: extractRetryAfterSeconds(error),
+        }
+      );
+    }
+
+    throw new NonRetryableProcessingError(`Gemini embedding call failed: ${error.message}`, {
+      reason: error.message,
+      provider: "gemini",
+      model: modelName,
+    });
+  }
+}
+
+export async function embedText(text, options = {}) {
+  return embedTextWithGemini(text);
 }
 
 async function generateAssistantTextWithGemini(prompt) {
@@ -1130,128 +627,30 @@ async function generateAssistantTextWithGemini(prompt) {
   );
 }
 
-async function generateAssistantTextWithOllama(prompt) {
-  try {
-    const result = await ollamaRequest("/api/generate", {
-      model: OLLAMA_LLM_MODEL,
-      prompt,
-      stream: false,
-      options: {
-        temperature: 0.2,
-      },
-    });
-
-    const text = parseOllamaGenerateText(result);
-    if (isBlank(text)) {
-      throw new NonRetryableProcessingError("Ollama assistant response was empty", {
-        provider: "ollama",
-      });
-    }
-
-    return text;
-  } catch (error) {
-    if (error instanceof NonRetryableProcessingError) {
-      throw error;
-    }
-
-    if (isTransientOllamaError(error)) {
-      throw new TransientProviderError(
-        `Transient error from Ollama assistant call: ${error.message}`,
-        {
-          reason: error.message,
-          model: OLLAMA_LLM_MODEL,
-          provider: "ollama",
-          retryAfterSeconds: extractRetryAfterSeconds(error),
-        }
-      );
-    }
-
-    throw new NonRetryableProcessingError("Ollama assistant call failed", {
-      reason: error.message,
-      model: OLLAMA_LLM_MODEL,
-      provider: "ollama",
-    });
-  }
-}
-
-async function generateAssistantTextWithGroq(prompt) {
-  const client = getGroqClient();
-
-  try {
-    const response = await client.chat.completions.create({
-      model: GROQ_LLM_MODEL,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.2,
-    });
-
-    const text = response?.choices?.[0]?.message?.content || "";
-    if (isBlank(text)) {
-      throw new NonRetryableProcessingError("Groq assistant response was empty", {
-        provider: "groq",
-      });
-    }
-
-    return text;
-  } catch (error) {
-    if (error instanceof NonRetryableProcessingError) {
-      throw error;
-    }
-
-    if (isTransientGroqError(error)) {
-      throw new TransientProviderError(`Transient error from Groq assistant call: ${error.message}`, {
-        reason: error.message,
-        model: GROQ_LLM_MODEL,
-        provider: "groq",
-        retryAfterSeconds: extractRetryAfterSeconds(error),
-      });
-    }
-
-    throw new NonRetryableProcessingError("Groq assistant call failed", {
-      reason: error.message,
-      model: GROQ_LLM_MODEL,
-      provider: "groq",
-    });
-  }
-}
-
 export async function generateAssistantText(prompt, options = {}) {
-  const forceProvider = String(options.forceProvider || "").toLowerCase();
-  const activeProvider = forceProvider || getActiveProvider();
-
-  if (activeProvider === "groq") {
-    try {
-      return await generateAssistantTextWithGroq(prompt);
-    } catch (error) {
-      if (forceProvider === "groq") {
-        throw error;
-      }
-
-      if (error?.retryable || error?.code === "NON_RETRYABLE_PROCESSING_ERROR") {
-        return generateAssistantTextWithGemini(prompt);
-      }
-
-      throw error;
-    }
-  }
-
-  if (activeProvider === "ollama") {
-    try {
-      return await generateAssistantTextWithOllama(prompt);
-    } catch (error) {
-      if (forceProvider === "ollama") {
-        throw error;
-      }
-
-      if (error?.retryable || error?.code === "NON_RETRYABLE_PROCESSING_ERROR") {
-        return generateAssistantTextWithGemini(prompt);
-      }
-
-      throw error;
-    }
-  }
-
   return generateAssistantTextWithGemini(prompt);
 }
+
+export async function getGeminiDetails() {
+  const client = getGeminiClient();
+  const modelName = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001";
+  const model = client.getGenerativeModel({ model: modelName });
+  
+  const startTime = Date.now();
+  await model.embedContent({
+    content: { role: "user", parts: [{ text: "ping" }] },
+    outputDimensionality: EMBEDDING_DIMENSION,
+  });
+  const latencyMs = Date.now() - startTime;
+
+  return {
+    provider: "gemini",
+    llmModel: process.env.GEMINI_LLM_MODEL || "gemini-3.5-flash",
+    embeddingModel: modelName,
+    latencyMs,
+  };
+}
+
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1262,3 +661,4 @@ function calculateBackoff(attempt) {
   const jitter = Math.floor(Math.random() * 300);
   return Math.min(exp + jitter, RETRY_POLICY.maxDelayMs);
 }
+

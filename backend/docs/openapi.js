@@ -16,7 +16,13 @@ export const openApiSpec = {
     { name: "Auth", description: "Authentication endpoints" },
     { name: "Files", description: "File operations" },
     { name: "Folders", description: "Folder operations" },
+    { name: "Share", description: "File sharing endpoints" },
+    { name: "Search", description: "Search endpoints" },
+    { name: "Storage", description: "Storage analytics endpoints" },
+    { name: "Trash", description: "Trash management endpoints" },
+    { name: "Activity", description: "Activity feed endpoints" },
     { name: "AI", description: "AI Knowledge Assistant endpoints" },
+    { name: "System", description: "System status and health check endpoints" },
   ],
   components: {
     securitySchemes: {
@@ -115,6 +121,16 @@ export const openApiSpec = {
     },
   },
   paths: {
+    "/api/auth/google": {
+      get: {
+        tags: ["Auth"],
+        summary: "Redirect to Google OAuth",
+        description: "Starts the Google OAuth flow. The response is a redirect.",
+        responses: {
+          302: { description: "Redirect to Google OAuth" },
+        },
+      },
+    },
     "/api/auth/google-signup": {
       post: {
         tags: ["Auth"],
@@ -126,10 +142,10 @@ export const openApiSpec = {
               schema: {
                 type: "object",
                 properties: {
-                  uid: { type: "string" },
-                  email: { type: "string", format: "email" },
-                  name: { type: "string" },
-                  avatar: { type: "string" },
+                  uid: { type: "string", example: "google-oauth-uid" },
+                  email: { type: "string", format: "email", example: "user@example.com" },
+                  name: { type: "string", example: "Alex Johnson" },
+                  avatar: { type: "string", example: "https://example.com/avatar.png" },
                 },
                 required: ["uid", "email", "name"],
               },
@@ -145,22 +161,8 @@ export const openApiSpec = {
               },
             },
           },
-          400: {
-            description: "Missing fields",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/ErrorResponse" },
-              },
-            },
-          },
-          500: {
-            description: "Auth failed",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/ErrorResponse" },
-              },
-            },
-          },
+          400: { description: "Missing fields" },
+          500: { description: "Auth failed" },
         },
       },
     },
@@ -175,8 +177,8 @@ export const openApiSpec = {
               schema: {
                 type: "object",
                 properties: {
-                  email: { type: "string", format: "email" },
-                  uid: { type: "string" },
+                  email: { type: "string", format: "email", example: "user@example.com" },
+                  uid: { type: "string", example: "google-oauth-uid" },
                 },
                 required: ["email", "uid"],
               },
@@ -192,19 +194,97 @@ export const openApiSpec = {
               },
             },
           },
-          400: {
-            description: "Missing fields or invalid credentials",
+          400: { description: "Missing fields or invalid credentials" },
+          404: { description: "User does not exist" },
+          500: { description: "Internal server error" },
+        },
+      },
+    },
+    "/api/auth/google/callback": {
+      get: {
+        tags: ["Auth"],
+        summary: "Google OAuth callback",
+        description: "Handles Google OAuth callback and issues JWT tokens.",
+        responses: {
+          200: {
+            description: "Authenticated successfully",
             content: {
               "application/json": {
-                schema: { $ref: "#/components/schemas/ErrorResponse" },
+                schema: { $ref: "#/components/schemas/AuthSuccess" },
               },
             },
           },
-          500: {
-            description: "Internal server error",
+          302: { description: "Redirect on auth failure" },
+          500: { description: "Auth failed" },
+        },
+      },
+    },
+    "/api/auth/me": {
+      get: {
+        tags: ["Auth"],
+        summary: "Get current user",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: "User fetched",
             content: {
               "application/json": {
-                schema: { $ref: "#/components/schemas/ErrorResponse" },
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean" },
+                    user: { $ref: "#/components/schemas/User" },
+                  },
+                },
+              },
+            },
+          },
+          401: { description: "Unauthorized" },
+        },
+      },
+    },
+    "/api/auth/refresh": {
+      post: {
+        tags: ["Auth"],
+        summary: "Refresh access token",
+        description: "Issues a new access token using the refresh token cookie.",
+        responses: {
+          200: {
+            description: "Access token issued",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean" },
+                    accessToken: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          401: { description: "Unauthorized" },
+          500: { description: "Auth failed" },
+        },
+      },
+    },
+    "/api/auth/logout": {
+      post: {
+        tags: ["Auth"],
+        summary: "Logout",
+        description: "Clears the refresh token cookie.",
+        responses: {
+          200: {
+            description: "Logged out",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean" },
+                    message: { type: "string" },
+                  },
+                },
               },
             },
           },
@@ -778,6 +858,304 @@ export const openApiSpec = {
         },
       },
     },
+    "/api/shared/by-me": {
+      get: {
+        tags: ["Share"],
+        summary: "Get files shared by the authenticated user",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: "Shared-by-me files fetched",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean" },
+                    files: {
+                      type: "array",
+                      items: { type: "object", additionalProperties: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          500: { description: "Internal server error" },
+        },
+      },
+    },
+    "/api/shared/with-me": {
+      get: {
+        tags: ["Share"],
+        summary: "Get files shared with the authenticated user",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: "Shared-with-me files fetched",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean" },
+                    files: {
+                      type: "array",
+                      items: { type: "object", additionalProperties: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          500: { description: "Internal server error" },
+        },
+      },
+    },
+    "/api/shared/{fileId}": {
+      post: {
+        tags: ["Share"],
+        summary: "Share a file with another user",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            in: "path",
+            name: "fileId",
+            required: true,
+            schema: { type: "string" },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  sharedWithEmail: { type: "string", format: "email" },
+                },
+                required: ["sharedWithEmail"],
+              },
+            },
+          },
+        },
+        responses: {
+          201: { description: "File shared" },
+          400: { description: "Invalid request" },
+          404: { description: "File not found" },
+          409: { description: "Already shared" },
+          500: { description: "Internal server error" },
+        },
+      },
+      delete: {
+        tags: ["Share"],
+        summary: "Revoke a user's access to a file",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            in: "path",
+            name: "fileId",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            in: "path",
+            name: "sharedWithEmail",
+            required: true,
+            schema: { type: "string", format: "email" },
+          },
+        ],
+        responses: {
+          200: { description: "Access revoked" },
+          404: { description: "Share record not found" },
+          500: { description: "Internal server error" },
+        },
+      },
+    },
+    "/api/search": {
+      get: {
+        tags: ["Search"],
+        summary: "Search files by name, MIME type, or tier",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            in: "query",
+            name: "q",
+            required: false,
+            schema: { type: "string" },
+          },
+        ],
+        responses: {
+          200: {
+            description: "Search results",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean" },
+                    files: {
+                      type: "array",
+                      items: { type: "object", additionalProperties: true },
+                    },
+                    count: { type: "integer" },
+                  },
+                },
+              },
+            },
+          },
+          500: { description: "Internal server error" },
+        },
+      },
+    },
+    "/api/storage": {
+      get: {
+        tags: ["Storage"],
+        summary: "Get storage usage breakdown",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: "Storage stats fetched",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean" },
+                    storage: { type: "object", additionalProperties: true },
+                  },
+                },
+              },
+            },
+          },
+          500: { description: "Internal server error" },
+        },
+      },
+    },
+    "/api/trash": {
+      get: {
+        tags: ["Trash"],
+        summary: "Get all trashed files",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: "Trashed files fetched",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean" },
+                    files: {
+                      type: "array",
+                      items: { type: "object", additionalProperties: true },
+                    },
+                    count: { type: "integer" },
+                  },
+                },
+              },
+            },
+          },
+          500: { description: "Internal server error" },
+        },
+      },
+      delete: {
+        tags: ["Trash"],
+        summary: "Empty trash",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Trash emptied" },
+          500: { description: "Internal server error" },
+        },
+      },
+    },
+    "/api/trash/{fileId}/restore": {
+      patch: {
+        tags: ["Trash"],
+        summary: "Restore a file from trash",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            in: "path",
+            name: "fileId",
+            required: true,
+            schema: { type: "string" },
+          },
+        ],
+        responses: {
+          200: { description: "File restored" },
+          404: { description: "File not found" },
+          500: { description: "Internal server error" },
+        },
+      },
+    },
+    "/api/trash/{fileId}": {
+      delete: {
+        tags: ["Trash"],
+        summary: "Permanently delete a file",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            in: "path",
+            name: "fileId",
+            required: true,
+            schema: { type: "string" },
+          },
+        ],
+        responses: {
+          200: { description: "File permanently deleted" },
+          404: { description: "File not found" },
+          500: { description: "Internal server error" },
+        },
+      },
+    },
+    "/api/activity": {
+      get: {
+        tags: ["Activity"],
+        summary: "Get activity feed",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            in: "query",
+            name: "type",
+            required: false,
+            schema: { type: "string" },
+          },
+          {
+            in: "query",
+            name: "search",
+            required: false,
+            schema: { type: "string" },
+          },
+          {
+            in: "query",
+            name: "limit",
+            required: false,
+            schema: { type: "integer", default: 50 },
+          },
+        ],
+        responses: {
+          200: {
+            description: "Activity feed fetched",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean" },
+                    activities: {
+                      type: "array",
+                      items: { type: "object", additionalProperties: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          500: { description: "Internal server error" },
+        },
+      },
+    },
     "/api/ai/query": {
       post: {
         tags: ["AI"],
@@ -882,5 +1260,101 @@ export const openApiSpec = {
         },
       },
     },
+    "/api/health": {
+      get: {
+        tags: ["System"],
+        summary: "Verify system health and status of external services",
+        description: "Runs status checks on external integrations including SQS, DynamoDB, Qdrant vector database, S3, and Gemini LLM. Returns status details.",
+        responses: {
+          200: {
+            description: "System is fully healthy",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    status: { type: "string", example: "healthy" },
+                    timestamp: { type: "string", format: "date-time" },
+                    system: {
+                      type: "object",
+                      properties: {
+                        uptime: { type: "number", example: 12.34 },
+                        memoryUsage: { type: "object", additionalProperties: true },
+                        platform: { type: "string", example: "win32" },
+                        nodeVersion: { type: "string", example: "v24.13.1" },
+                        env: { type: "string", example: "development" }
+                      }
+                    },
+                    services: {
+                      type: "object",
+                      properties: {
+                        dynamodb: {
+                          type: "object",
+                          properties: {
+                            status: { type: "string", example: "healthy" },
+                            details: { type: "object", additionalProperties: true },
+                            error: { type: "string", nullable: true, example: null }
+                          }
+                        },
+                        s3: {
+                          type: "object",
+                          properties: {
+                            status: { type: "string", example: "healthy" },
+                            details: { type: "object", additionalProperties: true },
+                            error: { type: "string", nullable: true, example: null }
+                          }
+                        },
+                        sqs: {
+                          type: "object",
+                          properties: {
+                            status: { type: "string", example: "healthy" },
+                            details: { type: "object", additionalProperties: true },
+                            error: { type: "string", nullable: true, example: null }
+                          }
+                        },
+                        qdrant: {
+                          type: "object",
+                          properties: {
+                            status: { type: "string", example: "healthy" },
+                            details: { type: "object", additionalProperties: true },
+                            error: { type: "string", nullable: true, example: null }
+                          }
+                        },
+                        llm: {
+                          type: "object",
+                          properties: {
+                            status: { type: "string", example: "healthy" },
+                            details: { type: "object", additionalProperties: true },
+                            error: { type: "string", nullable: true, example: null }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          503: {
+            description: "One or more system services are unhealthy",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    status: { type: "string", example: "unhealthy" },
+                    timestamp: { type: "string", format: "date-time" },
+                    services: {
+                      type: "object",
+                      additionalProperties: true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   },
 };

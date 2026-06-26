@@ -14,7 +14,7 @@ import {
   validatePermissionUpdate,
   validateShareAction,
 } from "../validators/share.validator.js";
-import { dynamoDb } from "../config/dynamoDB/index.js";
+import { dynamoDb } from "../config/dynamoDb.js";
 
 const FILES_TABLE = process.env.FILES_TABLE || "ChunklyUserFiles";
 const USER_TABLE = process.env.USER_TABLE || "ChunklyUsers";

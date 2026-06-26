@@ -1,4 +1,4 @@
-import { dynamoDb } from "../config/dynamoDB/index.js";
+import { dynamoDb } from "../config/dynamoDb.js";
 import { errorHandler } from "../utils/errorHandler.js";
 import { generateKnowledgeAssistantResponse } from "../services/ai.service.js";
 import { buildSmartInsights } from "../services/insights.service.js";

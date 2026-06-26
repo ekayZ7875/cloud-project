@@ -1,5 +1,5 @@
 import AWS from "aws-sdk";
-import s3 from "../config/S3/index.js";
+import s3 from "../config/s3.js";
 import { NonRetryableProcessingError } from "./errors/pipeline.errors.js";
 
 const textract = new AWS.Textract();

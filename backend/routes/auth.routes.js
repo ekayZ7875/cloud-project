@@ -1,7 +1,14 @@
 import express from 'express'
 import passport from '../config/passport.js'
-import { handleGoogleCallback, getMe, refreshAccessToken, logout } from '../controllers/auth.controller.js'
-import { isAuthenticated } from '../middlewares/auth.middleware.js'
+import {
+  handleGoogleCallback,
+  getMe,
+  refreshAccessToken,
+  logout,
+  userSignup,
+  userLogin,
+} from '../controllers/auth.controller.js'
+import { isAuthenticated } from '../middlewares/auth.middlewares.js';
 
 const router = express.Router()
 
@@ -18,6 +25,14 @@ router.get(
   passport.authenticate('google', { session: false, failureRedirect: `${process.env.CLIENT_URL}/login?error=auth_failed` }),
   handleGoogleCallback
 )
+
+// @route   POST /auth/google-signup
+// @desc    Sign up or sign in with Google UID
+router.post('/google-signup', userSignup)
+
+// @route   POST /auth/google-login
+// @desc    Login with email and Google UID
+router.post('/google-login', userLogin)
 
 // @route   GET /auth/me
 // @desc    Get current logged-in user

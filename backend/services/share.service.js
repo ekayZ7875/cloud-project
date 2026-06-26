@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
-import { dynamoDb } from "../config/dynamoDB/index.js";
-import { generateId } from "../utils/generateUserId.js";
+import { dynamoDb } from "../config/dynamoDb.js";
+import { generateId } from "../utils/generatedID.js";
 import { SHARE_STATUS, SHARE_PERMISSION, SHARE_PERMISSION_VALUES } from "../constants/share.constants.js";
 
 dotenv.config();

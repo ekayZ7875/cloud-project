@@ -1,4 +1,4 @@
-import { dynamoDb } from "../config/dynamoDB/index.js";
+import { dynamoDb } from "../config/dynamoDb.js";
 import { getProcessingJob } from "./metadata.service.js";
 
 const FILES_TABLE = process.env.FILES_TABLE || "ChunklyUserFiles";

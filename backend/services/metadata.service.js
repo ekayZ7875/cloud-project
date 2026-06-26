@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
-import { dynamoDb } from "../config/dynamoDB/index.js";
+import { dynamoDb } from "../config/dynamoDb.js";
+import { GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { PIPELINE_STATUS } from "../constants/pipeline.constants.js";
 
 dotenv.config();
@@ -27,13 +28,13 @@ export async function createProcessingJob({ jobId, userId, fileId, s3Url }) {
     updatedAt: now,
   };
 
-  await dynamoDb
-    .put({
+  await dynamoDb.send(
+    new PutCommand({
       TableName: FILE_PROCESSING_TABLE,
       Item: item,
       ConditionExpression: "attribute_not_exists(jobId)",
     })
-    .promise();
+  );
 
   return item;
 }
@@ -43,8 +44,8 @@ export async function markProcessingStarted({ userId, jobId, attempt }) {
 
   const now = new Date().toISOString();
 
-  await dynamoDb
-    .update({
+  await dynamoDb.send(
+    new UpdateCommand({
       TableName: FILE_PROCESSING_TABLE,
       Key: { userId, jobId },
       UpdateExpression:
@@ -59,7 +60,7 @@ export async function markProcessingStarted({ userId, jobId, attempt }) {
         ":startedAt": now,
       },
     })
-    .promise();
+  );
 }
 
 export async function markProcessingPendingRetry({ userId, jobId, attempt, errorMessage }) {
@@ -67,8 +68,8 @@ export async function markProcessingPendingRetry({ userId, jobId, attempt, error
 
   const now = new Date().toISOString();
 
-  await dynamoDb
-    .update({
+  await dynamoDb.send(
+    new UpdateCommand({
       TableName: FILE_PROCESSING_TABLE,
       Key: { userId, jobId },
       UpdateExpression:
@@ -83,7 +84,7 @@ export async function markProcessingPendingRetry({ userId, jobId, attempt, error
         ":lastError": errorMessage,
       },
     })
-    .promise();
+  );
 }
 
 export async function markProcessingCompleted({ userId, jobId, result }) {
@@ -91,8 +92,8 @@ export async function markProcessingCompleted({ userId, jobId, result }) {
 
   const now = new Date().toISOString();
 
-  await dynamoDb
-    .update({
+  await dynamoDb.send(
+    new UpdateCommand({
       TableName: FILE_PROCESSING_TABLE,
       Key: { userId, jobId },
       UpdateExpression:
@@ -107,7 +108,7 @@ export async function markProcessingCompleted({ userId, jobId, result }) {
         ":analysis": result,
       },
     })
-    .promise();
+  );
 }
 
 export async function markProcessingFailed({ userId, jobId, attempt, errorMessage }) {
@@ -115,8 +116,8 @@ export async function markProcessingFailed({ userId, jobId, attempt, errorMessag
 
   const now = new Date().toISOString();
 
-  await dynamoDb
-    .update({
+  await dynamoDb.send(
+    new UpdateCommand({
       TableName: FILE_PROCESSING_TABLE,
       Key: { userId, jobId },
       UpdateExpression:
@@ -132,18 +133,18 @@ export async function markProcessingFailed({ userId, jobId, attempt, errorMessag
         ":lastError": errorMessage,
       },
     })
-    .promise();
+  );
 }
 
 export async function getProcessingJob({ userId, jobId }) {
   requireTable();
 
-  const result = await dynamoDb
-    .get({
+  const result = await dynamoDb.send(
+    new GetCommand({
       TableName: FILE_PROCESSING_TABLE,
       Key: { userId, jobId },
     })
-    .promise();
+  );
 
   return result.Item || null;
 }

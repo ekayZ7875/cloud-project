@@ -1,6 +1,6 @@
-import s3 from "../config/S3/index.js";
-import { dynamoDb } from "../config/dynamoDB/index.js";
-import { generateId } from "../utils/generateUserId.js";
+import s3 from "../config/s3.js";
+import { dynamoDb } from "../config/dynamoDb.js";
+import { generateId } from "../utils/generatedID.js";
 import { errorHandler } from "../utils/errorHandler.js";
 import {
   createProcessingJob,
@@ -12,10 +12,10 @@ import { publishFileProcessingJob } from "../services/queue.service.js";
 import dotenv from "dotenv";
 dotenv.config();
 
-const FILES_TABLE = process.env.FILES_TABLE;
-const USER_TABLE = process.env.USER_TABLE;
-const TRASH_TABLE = process.env.TRASH_TABLE;
-const FOLDERS_TABLE = process.env.FOLDERS_TABLE;
+const FILES_TABLE = process.env.FILES_TABLE || "ChunklyUserFiles";
+const USER_TABLE = process.env.USER_TABLE || process.env.USERS_TABLE || "ChunklyUsers";
+const TRASH_TABLE = process.env.TRASH_TABLE || "ChunklyTrashTable";
+const FOLDERS_TABLE = process.env.FOLDERS_TABLE || "ChunklyUserFolders";
 const BUCKET_NAME = process.env.AWS_BUCKET_NAME;
 
 function normalizeTag(tag) {
@@ -870,7 +870,7 @@ export const downloadFile = async (req, res) => {
       ResponseContentDisposition: `${isDownload ? 'attachment' : 'inline'}; filename="${result.Item.fileName}"`,
     };
 
-    const url = s3.getSignedUrl("getObject", params);
+    const url = await s3.getSignedUrl("getObject", params);
 
     return res.status(200).json({
       success: true,

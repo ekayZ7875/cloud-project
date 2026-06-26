@@ -4,28 +4,22 @@ import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import morgan from "morgan";
 import bodyParser from "body-parser";
-import cors from "cors";
+import passport from "./config/passport.js";
 import authRoutes from "./routes/auth.routes.js";
 import fileRoutes from "./routes/file.routes.js";
 import folderRoutes from "./routes/folder.routes.js";
 import aiRoutes from "./routes/ai.routes.js";
 import shareRoutes from "./routes/share.routes.js";
+import sharedRoutes from "./routes/sharedRoutes.js";
+import activityRoutes from "./routes/activity.routes.js";
+import searchRoutes from "./routes/search.routes.js";
+import storageRoutes from "./routes/storage.routes.js";
+import trashRoutes from "./routes/trash.routes.js";
+import healthRoutes from "./routes/health.routes.js";
 import swaggerUi from "swagger-ui-express";
 import { openApiSpec } from "./docs/openapi.js";
 import logger from "./libs/logger.js";
-
-// ─── Routes ───────────────────────────────────────────────────────────────────
-import authRoutes from "./src/routes/auth.routes.js";
-import fileRoutes from "./src/routes/file.routes.js";
-import folderRoutes from "./src/routes/folder.routes.js";
-import shareRoutes from "./src/routes/sharedRoutes.js";
-import activityRoutes from "./src/routes/activity.routes.js";
-import searchRoutes from "./src/routes/search.routes.js";
-import storageRoutes from "./src/routes/storage.routes.js";
-import trashRoutes from "./src/routes/trash.routes.js";
-
-// ─── Middlewares ──────────────────────────────────────────────────────────────
-import { errorMiddleware } from "./src/middlewares/error.middleware.js";
+import { errorMiddleware } from "./middlewares/error.middleware.js";
 
 dotenv.config();
 
@@ -57,6 +51,15 @@ app.use("/api/files", fileRoutes);
 app.use("/api/folder", folderRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/share", shareRoutes);
+app.use("/api/shared", sharedRoutes);
+app.use("/api/activity", activityRoutes);
+app.use("/api/search", searchRoutes);
+app.use("/api/storage", storageRoutes);
+app.use("/api/trash", trashRoutes);
+app.use("/health", healthRoutes);
+app.use("/api/health", healthRoutes);
+
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
 
 app.use((req, res, next) => {
   logger.warn(`Unhandled route: ${req.method} ${req.url}`);

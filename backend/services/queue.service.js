@@ -104,3 +104,28 @@ export async function deleteMessage(receiptHandle) {
     })
     .promise();
 }
+
+export async function getQueueDetails() {
+  assertQueueUrl();
+  const res = await sqs
+    .getQueueAttributes({
+      QueueUrl: queueUrl,
+      AttributeNames: [
+        "QueueArn",
+        "ApproximateNumberOfMessages",
+        "ApproximateNumberOfMessagesNotVisible",
+        "VisibilityTimeout"
+      ],
+    })
+    .promise();
+  
+  return {
+    queueUrl,
+    arn: res.Attributes?.QueueArn,
+    approximateNumberOfMessages: Number(res.Attributes?.ApproximateNumberOfMessages || 0),
+    approximateNumberOfMessagesNotVisible: Number(res.Attributes?.ApproximateNumberOfMessagesNotVisible || 0),
+    visibilityTimeout: Number(res.Attributes?.VisibilityTimeout || 0)
+  };
+}
+
+

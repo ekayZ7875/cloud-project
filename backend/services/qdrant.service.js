@@ -66,6 +66,32 @@ export async function verifyQdrantConnection() {
   }
 }
 
+export async function getQdrantDetails() {
+  const client = getQdrantClient();
+  const url = process.env.QDRANT_URL;
+  const targetCollection = QDRANT_DEFAULTS.collectionName;
+
+  try {
+    const collectionsResult = await client.getCollections();
+    const collectionNames = (collectionsResult.collections || []).map(c => c.name);
+    const exists = collectionNames.includes(targetCollection);
+    
+    return {
+      url,
+      targetCollection,
+      collectionExists: exists,
+      availableCollectionsCount: collectionNames.length,
+      availableCollections: collectionNames,
+    };
+  } catch (error) {
+    const providerMessage =
+      error?.data?.status?.error || error?.message || "Unknown Qdrant health check error";
+
+    throw new Error(`Qdrant health check failed: ${providerMessage}`);
+  }
+}
+
+
 function extractVectorsConfig(collectionInfo) {
   const config = collectionInfo?.config || collectionInfo?.result?.config;
   return config?.params?.vectors || config?.vectors;

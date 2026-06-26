@@ -1,22 +1,24 @@
 import express from 'express'
-import { isAuthenticated } from '../middlewares/auth.middleware.js'
-import  upload  from '../config/multer.js'
+import { isAuthenticated } from '../middlewares/auth.middlewares.js'
+import upload from '../config/mutler.js'
 import {
   uploadFile,
+  uploadFolder,
   getUserFiles,
   getSingleFile,
   softDeleteFile,
   getTrashedFiles,
-  toggleStarFile,
-  getStarredFiles,
   getRecentUploads,
   searchFilesByTags,
   getAllUserFileTags,
   downloadFile,
-  renameFile,
-  restoreFromTrash,
-  permanentDeleteFile,
-  emptyTrash,
+  getFileProcessingStatus,
+  getUserStorageCapacity,
+  getAllFoldersForUser,
+  softDeleteFolder,
+  restoreItem,
+  permanentDelete,
+  getFilesInFolder,
 } from '../controllers/file.controller.js'
 
 const router = express.Router()
@@ -25,37 +27,26 @@ const router = express.Router()
 router.use(isAuthenticated)
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
-router.post('/upload', upload.single('file'), uploadFile)
+router.post('/upload-file', upload.single('file'), uploadFile)
+router.post('/upload-folder', upload.array('files'), uploadFolder)
 
 // ─── Read ─────────────────────────────────────────────────────────────────────
-router.get('/', getUserFiles)
-router.get('/starred', getStarredFiles)
-router.get('/recent', getRecentUploads)
-router.get('/:fileId', getSingleFile)
-router.get('/:fileId/download', downloadFile)
+router.get('/get-files', getUserFiles)
+router.get('/get-file', getSingleFile)
+router.get('/get-trashed-files', getTrashedFiles)
+router.get('/get-recent-files', getRecentUploads)
+router.get('/search-by-tags', searchFilesByTags)
+router.get('/tags', getAllUserFileTags)
+router.post('/download-file', downloadFile)
+router.get('/processing-status/:jobId', getFileProcessingStatus)
+router.get('/storage-capacity', getUserStorageCapacity)
+router.get('/get-folders', getAllFoldersForUser)
+router.get('/get-folder-files', getFilesInFolder)
 
-// ─── Update ───────────────────────────────────────────────────────────────────
-router.patch('/:fileId/rename', renameFile)
-router.patch('/:fileId/star', toggleStarFile)
-
-router.post("/upload-file", authMiddleware, upload.single("file"), uploadFile);
-router.post("/upload-folder", authMiddleware, upload.array("files"), uploadFolder);
-router.get("/get-files", authMiddleware, getUserFiles);
-router.get("/get-file", authMiddleware, getSingleFile);
-router.post("/delete-files", authMiddleware, softDeleteFile);
-router.post("/star-file", authMiddleware, toggleStarFile);
-router.get("/get-starred-files", authMiddleware, getStarredFiles);
-router.get("/get-trashed-files", authMiddleware, getTrashedFiles);
-router.get("/get-recent-files", authMiddleware, getRecentUploads);
-router.get("/search-by-tags", authMiddleware, searchFilesByTags);
-router.get("/tags", authMiddleware, getAllUserFileTags);
-router.post("/download-file", authMiddleware, downloadFile);
-router.get("/processing-status/:jobId", authMiddleware, getFileProcessingStatus);
-router.get("/storage-capacity", authMiddleware, getUserStorageCapacity);
-router.get("/get-folders", authMiddleware, getAllFoldersForUser);
-router.post("/create-folder", authMiddleware, createFolder);
-router.post("/delete-folder", authMiddleware, softDeleteFolder);
-router.post("/restore-item", authMiddleware, restoreItem);
-router.post("/permanent-delete", authMiddleware, permanentDelete);
+// ─── Delete / Restore ─────────────────────────────────────────────────────────
+router.post('/delete-files', softDeleteFile)
+router.post('/delete-folder', softDeleteFolder)
+router.post('/restore-item', restoreItem)
+router.post('/permanent-delete', permanentDelete)
 
 export default router
