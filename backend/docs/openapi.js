@@ -8,6 +8,10 @@ export const openApiSpec = {
   },
   servers: [
     {
+      url: "https://backend-v1.chunkly.tech",
+      description: "Production server",
+    },
+    {
       url: "http://localhost:8080",
       description: "Local development server",
     },
