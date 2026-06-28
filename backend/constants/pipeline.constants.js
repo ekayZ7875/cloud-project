@@ -50,3 +50,6 @@ export const QDRANT_DEFAULTS = {
   collectionName: process.env.QDRANT_COLLECTION || "file_chunks",
   distance: process.env.QDRANT_DISTANCE || "Cosine",
 };
+
+export const DEFAULT_FILE_SIZE_ALLOWED = 18 * 1024 * 1024 * 1024; // 18 GB
+

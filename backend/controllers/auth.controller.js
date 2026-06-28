@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { generateId } from "../utils/generatedID.js";
+import { DEFAULT_FILE_SIZE_ALLOWED } from "../constants/pipeline.constants.js";
 import { attachRecipientToPendingShares } from "../services/share.service.js";
 
 dotenv.config();
@@ -83,7 +84,7 @@ const userSignup = asyncHandler(async (req, res) => {
       avatar: avatar || null,
       uid,
       totalFileSize: 0,
-      fileSizeAllowed: 5 * 1024 * 1024 * 1024,
+      fileSizeAllowed: DEFAULT_FILE_SIZE_ALLOWED,
       createdAt: new Date().toISOString(),
     };
 

@@ -1,6 +1,7 @@
 import { dynamoDb } from '../config/dynamoDb.js'
 import { QueryCommand, GetCommand } from '@aws-sdk/lib-dynamodb'
 import {asyncHandler} from '../utils/asyncHandler.js'
+import { DEFAULT_FILE_SIZE_ALLOWED } from '../constants/pipeline.constants.js'
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
@@ -46,7 +47,7 @@ const getStorageStats = asyncHandler(async (req, res) => {
   }))
 
   const allFiles = files || []
-  const totalAllowed = user?.fileSizeAllowed || 5 * 1024 * 1024 * 1024
+  const totalAllowed = user?.fileSizeAllowed || DEFAULT_FILE_SIZE_ALLOWED
 
   // Total used
   const totalUsed = allFiles.reduce((acc, f) => acc + (f.size || 0), 0)

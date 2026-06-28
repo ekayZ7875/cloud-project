@@ -8,6 +8,7 @@ import {
   markProcessingFailed,
 } from "../services/metadata.service.js";
 import { canUserAccessFile } from "../services/share.service.js";
+import { DEFAULT_FILE_SIZE_ALLOWED } from "../constants/pipeline.constants.js";
 import { publishFileProcessingJob } from "../services/queue.service.js";
 import dotenv from "dotenv";
 dotenv.config();
@@ -973,7 +974,7 @@ export const getUserStorageCapacity = async (req, res) => {
       return acc + (Number(file.fileSize) || 0);
     }, 0);
 
-    const allowedBytes = Number(user.fileSizeAllowed || 1073741824); // default 1GB
+    const allowedBytes = Number(user.fileSizeAllowed || DEFAULT_FILE_SIZE_ALLOWED); // default from constants
     const remainingBytes = Math.max(allowedBytes - dynamicUsedBytes, 0);
     const usagePercentage =
       allowedBytes > 0 ? Number(((dynamicUsedBytes / allowedBytes) * 100).toFixed(2)) : 0;

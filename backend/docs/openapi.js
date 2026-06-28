@@ -1,3 +1,8 @@
+import dotenv from "dotenv";
+dotenv.config();
+
+const PORT = process.env.PORT || 8080;
+
 export const openApiSpec = {
   openapi: "3.0.3",
   info: {
@@ -8,12 +13,12 @@ export const openApiSpec = {
   },
   servers: [
     {
-      url: "https://backend-v1.chunkly.tech",
-      description: "Production server",
+      url: `http://localhost:${PORT}`,
+      description: "Local development server",
     },
     {
-      url: "http://localhost:8080",
-      description: "Local development server",
+      url: "https://backend-v1.chunkly.tech",
+      description: "Production server",
     },
   ],
   tags: [
@@ -677,8 +682,8 @@ export const openApiSpec = {
                       type: "object",
                       properties: {
                         usedBytes: { type: "number", example: 10240 },
-                        allowedBytes: { type: "number", example: 1073741824 },
-                        remainingBytes: { type: "number", example: 1073731584 },
+                        allowedBytes: { type: "number", example: 19327352832 },
+                        remainingBytes: { type: "number", example: 19327342592 },
                         usagePercentage: { type: "number", example: 0.95 },
                       },
                     },

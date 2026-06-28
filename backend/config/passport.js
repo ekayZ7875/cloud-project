@@ -2,6 +2,7 @@ import passport from 'passport'
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20'
 import { dynamoDb } from './dynamoDb.js'
 import {  generateId } from '../utils/generatedID.js'
+import { DEFAULT_FILE_SIZE_ALLOWED } from '../constants/pipeline.constants.js'
 import { PutCommand, GetCommand } from '@aws-sdk/lib-dynamodb'
 import dotenv from 'dotenv'
 dotenv.config()
@@ -27,7 +28,7 @@ passport.use(new GoogleStrategy({
       name: profile.displayName,
       avatar: profile.photos[0].value,
       totalFileSize: 0,
-      fileSizeAllowed: 5 * 1024 * 1024 * 1024,
+      fileSizeAllowed: DEFAULT_FILE_SIZE_ALLOWED,
       createdAt: new Date().toISOString(),
     }
 
