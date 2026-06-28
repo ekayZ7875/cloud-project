@@ -66,13 +66,15 @@ export async function getChatSession(userId, chatId) {
 }
 
 // Create a new chat session
-export async function createChatSession(userId, title = "New Conversation") {
+export async function createChatSession(userId, title = "New Conversation", fileId = null, folderId = null) {
   const chatId = `CHAT_${generateId()}`;
   const now = new Date().toISOString();
   const newChat = {
     userId,
     chatId,
     title,
+    fileId,
+    folderId,
     messages: [],
     createdAt: now,
     updatedAt: now,

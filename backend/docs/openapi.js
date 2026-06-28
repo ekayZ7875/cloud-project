@@ -1311,7 +1311,9 @@ export const openApiSpec = {
               schema: {
                 type: "object",
                 properties: {
-                  title: { type: "string", example: "My Study Chat" }
+                  title: { type: "string", example: "My Study Chat" },
+                  fileId: { type: "string", nullable: true, example: "FILE_123" },
+                  folderId: { type: "string", nullable: true, example: "FOLD_456" }
                 }
               }
             }
@@ -1332,6 +1334,8 @@ export const openApiSpec = {
                         userId: { type: "string" },
                         chatId: { type: "string" },
                         title: { type: "string" },
+                        fileId: { type: "string", nullable: true },
+                        folderId: { type: "string", nullable: true },
                         messages: { type: "array", items: { type: "object" } },
                         createdAt: { type: "string", format: "date-time" },
                         updatedAt: { type: "string", format: "date-time" }

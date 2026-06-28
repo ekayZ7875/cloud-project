@@ -25,7 +25,30 @@ export const handleAiQuery = async (req, res) => {
       return res.status(400).send(errorHandler(400, "Bad Request", "query is required"));
     }
 
-    // 1. Fetch relevant files for the user
+    // 1. Retrieve history or auto-generate a new chatId & determine active file/folder context
+    let history = [];
+    let sessionChatId = chatId;
+    let activeFileId = fileId;
+    let activeFolderId = folderId;
+
+    if (sessionChatId) {
+      const chat = await getChatSession(userId, sessionChatId);
+      if (!chat) {
+        return res.status(404).send(errorHandler(404, "Not Found", "Chat session not found"));
+      }
+      history = chat.messages || [];
+      activeFileId = fileId || chat.fileId || null;
+      activeFolderId = folderId || chat.folderId || null;
+    } else {
+      const truncatedTitle = query.length > 40 ? query.substring(0, 40) + "..." : query;
+      const newChat = await createChatSession(userId, truncatedTitle, fileId, folderId);
+      sessionChatId = newChat.chatId;
+      activeFileId = fileId;
+      activeFolderId = folderId;
+      history = [];
+    }
+
+    // 2. Fetch relevant files for the user
     const result = await dynamoDb
       .query({
         TableName: FILES_TABLE,
@@ -41,10 +64,10 @@ export const handleAiQuery = async (req, res) => {
     // Filter out deleted files context
     files = files.filter(f => !f.isDeleted && !f.is_deleted);
 
-    if (fileId) {
-      files = files.filter(f => f.fileId === fileId);
-    } else if (folderId) {
-      files = files.filter(f => f.folderId === folderId);
+    if (activeFileId) {
+      files = files.filter(f => f.fileId === activeFileId);
+    } else if (activeFolderId) {
+      files = files.filter(f => f.folderId === activeFolderId);
     }
 
     if (files.length === 0) {
@@ -93,28 +116,17 @@ export const handleAiQuery = async (req, res) => {
       return acc;
     }, {});
 
-    // 1.5 Retrieve history if chatId is provided
-    let history = [];
-    if (chatId) {
-      const chat = await getChatSession(userId, chatId);
-      if (!chat) {
-        return res.status(404).send(errorHandler(404, "Not Found", "Chat session not found"));
-      }
-      history = chat.messages || [];
-    }
-
-    // 2. Query the Knowledge Assistant
+    // 3. Query the Knowledge Assistant
     const answer = await generateKnowledgeAssistantResponse(query, fileIds, fileMappings, studyMode, history);
 
-    // 2.5 Save conversation turn to DB if in a chat session
-    if (chatId) {
-      await appendMessageToChat(userId, chatId, query, answer);
-    }
+    // 4. Save conversation turn to DB
+    await appendMessageToChat(userId, sessionChatId, query, answer);
 
-    // 3. Return the response
+    // 5. Return the response
     return res.status(200).json({
       success: true,
-      data: answer
+      data: answer,
+      chatId: sessionChatId
     });
 
   } catch (error) {
@@ -160,8 +172,8 @@ export const handleGetChats = async (req, res) => {
 export const handleCreateChat = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { title } = req.body;
-    const chat = await createChatSession(userId, title);
+    const { title, fileId, folderId } = req.body;
+    const chat = await createChatSession(userId, title, fileId, folderId);
     return res.status(201).json({ success: true, data: chat });
   } catch (error) {
     console.error("Create Chat Error:", error);
