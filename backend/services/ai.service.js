@@ -1,35 +1,39 @@
 import { embedText, generateAssistantText } from "./gemini.service.js";
 import { searchChunksByVector, getAllChunksForFiles } from "./qdrant.service.js";
+import {
+  AI_PROMPT_TEMPLATE,
+  CONVERSATIONAL_PROMPT_TEMPLATE,
+  CONVERSATIONAL_STUDY_PROMPT_TEMPLATE
+} from "../prompts/ai.prompts.js";
 
-const AI_PROMPT_TEMPLATE = `You are a personal knowledge assistant. Your goal is to answer user queries based ONLY on the provided file context.
+function formatHistory(history = []) {
+  if (!history || history.length === 0) return "No history yet.";
+  return history
+    .map((msg) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
+    .join("\n");
+}
 
-Rules:
-1. Do NOT hallucinate. If the requested information is not found in the provided context, respond EXACTLY with: "⚠️ I could not find this information in your files."
-2. Base your answers strictly on the provided context chunks.
-3. If multiple files are involved, organize the answer file-wise.
-4. Keep answers concise, structured, and helpful.
-5. If the user asks for a summary, provide a 5-7 line paragraph. If it's a folder, give an overall summary and then file-wise highlights.
-6. If the user asks for key points, use bullet points focusing on important insights.
-7. If the user asks for deadlines/tasks, use the format: "Task | Date | File Name". Return a list of deadlines.
-8. If the user asks a question, answer precisely and cite the source file names like "(Source: file_name)".
-9. For cross-file insights, compare documents, find common themes, and highlight differences if asked.
-
-Context Data (File chunks extracted from the user's files):
-{{CONTEXT}}
-
-User Query: {{QUERY}}
-
-Response:`;
-
-function buildPrompt(query, contexts) {
+function buildConversationalPrompt(query, contexts, history = [], studyMode = false) {
   const contextString = contexts
     .map((c) => `--- File: ${c.fileName} ---\n${c.text}`)
     .join("\n\n");
   
-  return AI_PROMPT_TEMPLATE.replace("{{CONTEXT}}", contextString).replace("{{QUERY}}", query);
+  const historyString = formatHistory(history);
+  const template = studyMode ? CONVERSATIONAL_STUDY_PROMPT_TEMPLATE : CONVERSATIONAL_PROMPT_TEMPLATE;
+  
+  return template
+    .replace("{{CONTEXT}}", contextString)
+    .replace("{{HISTORY}}", historyString)
+    .replace("{{QUERY}}", query);
 }
 
-export async function generateKnowledgeAssistantResponse(query, fileIds = [], fileMappings = {}) {
+export async function generateKnowledgeAssistantResponse(
+  query,
+  fileIds = [],
+  fileMappings = {},
+  studyMode = false,
+  history = []
+) {
   let searchResults = [];
   const lowerQuery = query.toLowerCase();
   
@@ -74,7 +78,7 @@ export async function generateKnowledgeAssistantResponse(query, fileIds = [], fi
   });
 
   // 4. Construct LLM Prompt
-  const prompt = buildPrompt(query, contextData);
+  const prompt = buildConversationalPrompt(query, contextData, history, studyMode);
 
   // 5. Generate final response using the active LLM provider.
   return generateAssistantText(prompt);

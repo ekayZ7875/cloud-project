@@ -1237,6 +1237,8 @@ export const openApiSpec = {
                   query: { type: "string", example: "Summarize my files" },
                   fileId: { type: "string", nullable: true, example: "FILE_123" },
                   folderId: { type: "string", nullable: true, example: "FOLD_456" },
+                  studyMode: { type: "boolean", nullable: true, example: true, description: "Whether to format and focus the response for learning/study" },
+                  chatId: { type: "string", nullable: true, example: "CHAT_abc123", description: "Optional chat session ID for multi-turn conversations" }
                 },
                 required: ["query"],
               },
@@ -1263,6 +1265,139 @@ export const openApiSpec = {
           500: { description: "Server error" },
         },
       },
+    },
+    "/api/ai/chats": {
+      get: {
+        tags: ["AI"],
+        summary: "Get all chat sessions for authenticated user",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: "Chats retrieved successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          userId: { type: "string" },
+                          chatId: { type: "string" },
+                          title: { type: "string" },
+                          createdAt: { type: "string", format: "date-time" },
+                          updatedAt: { type: "string", format: "date-time" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          500: { description: "Server error" }
+        }
+      },
+      post: {
+        tags: ["AI"],
+        summary: "Create a new chat session",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  title: { type: "string", example: "My Study Chat" }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          201: {
+            description: "Chat session created successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: {
+                      type: "object",
+                      properties: {
+                        userId: { type: "string" },
+                        chatId: { type: "string" },
+                        title: { type: "string" },
+                        messages: { type: "array", items: { type: "object" } },
+                        createdAt: { type: "string", format: "date-time" },
+                        updatedAt: { type: "string", format: "date-time" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          500: { description: "Server error" }
+        }
+      }
+    },
+    "/api/ai/chats/{chatId}": {
+      get: {
+        tags: ["AI"],
+        summary: "Get chat session details and message history",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            in: "path",
+            name: "chatId",
+            required: true,
+            schema: { type: "string" }
+          }
+        ],
+        responses: {
+          200: {
+            description: "Chat details retrieved successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: {
+                      type: "object",
+                      properties: {
+                        userId: { type: "string" },
+                        chatId: { type: "string" },
+                        title: { type: "string" },
+                        messages: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              role: { type: "string", example: "user" },
+                              content: { type: "string" },
+                              timestamp: { type: "string", format: "date-time" }
+                            }
+                          }
+                        },
+                        createdAt: { type: "string", format: "date-time" },
+                        updatedAt: { type: "string", format: "date-time" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          404: { description: "Chat not found" },
+          500: { description: "Server error" }
+        }
+      }
     },
     "/api/ai/insights": {
       get: {

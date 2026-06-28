@@ -4,6 +4,12 @@ import { generateKnowledgeAssistantResponse } from "../services/ai.service.js";
 import { buildSmartInsights } from "../services/insights.service.js";
 import { getProcessingJob } from "../services/metadata.service.js";
 import { PIPELINE_STATUS } from "../constants/pipeline.constants.js";
+import {
+  getUserChats,
+  getChatSession,
+  createChatSession,
+  appendMessageToChat,
+} from "../services/chat.service.js";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -13,7 +19,7 @@ export const handleAiQuery = async (req, res) => {
   try {
     const user = req.user;
     const userId = user.userId;
-    const { query, fileId, folderId } = req.body;
+    const { query, fileId, folderId, studyMode, chatId } = req.body;
 
     if (!query) {
       return res.status(400).send(errorHandler(400, "Bad Request", "query is required"));
@@ -87,8 +93,23 @@ export const handleAiQuery = async (req, res) => {
       return acc;
     }, {});
 
+    // 1.5 Retrieve history if chatId is provided
+    let history = [];
+    if (chatId) {
+      const chat = await getChatSession(userId, chatId);
+      if (!chat) {
+        return res.status(404).send(errorHandler(404, "Not Found", "Chat session not found"));
+      }
+      history = chat.messages || [];
+    }
+
     // 2. Query the Knowledge Assistant
-    const answer = await generateKnowledgeAssistantResponse(query, fileIds, fileMappings);
+    const answer = await generateKnowledgeAssistantResponse(query, fileIds, fileMappings, studyMode, history);
+
+    // 2.5 Save conversation turn to DB if in a chat session
+    if (chatId) {
+      await appendMessageToChat(userId, chatId, query, answer);
+    }
 
     // 3. Return the response
     return res.status(200).json({
@@ -122,5 +143,43 @@ export const getSmartInsights = async (req, res) => {
     return res
       .status(500)
       .send(errorHandler(500, "Internal Server Error", "Failed to build smart insights"));
+  }
+};
+
+export const handleGetChats = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const chats = await getUserChats(userId);
+    return res.status(200).json({ success: true, data: chats });
+  } catch (error) {
+    console.error("Get Chats Error:", error);
+    return res.status(500).send(errorHandler(500, "Internal Server Error", "Failed to fetch chats"));
+  }
+};
+
+export const handleCreateChat = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { title } = req.body;
+    const chat = await createChatSession(userId, title);
+    return res.status(201).json({ success: true, data: chat });
+  } catch (error) {
+    console.error("Create Chat Error:", error);
+    return res.status(500).send(errorHandler(500, "Internal Server Error", "Failed to create chat"));
+  }
+};
+
+export const handleGetChatDetails = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { chatId } = req.params;
+    const chat = await getChatSession(userId, chatId);
+    if (!chat) {
+      return res.status(404).send(errorHandler(404, "Not Found", "Chat session not found"));
+    }
+    return res.status(200).json({ success: true, data: chat });
+  } catch (error) {
+    console.error("Get Chat Details Error:", error);
+    return res.status(500).send(errorHandler(500, "Internal Server Error", "Failed to fetch chat details"));
   }
 };
