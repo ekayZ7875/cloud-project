@@ -15,6 +15,7 @@ import {
   validateShareAction,
 } from "../validators/share.validator.js";
 import { dynamoDb } from "../config/dynamoDb.js";
+import { logActivity } from "../utils/activityLogger.js";
 
 const FILES_TABLE = process.env.FILES_TABLE || "ChunklyUserFiles";
 const USER_TABLE = process.env.USER_TABLE || "ChunklyUsers";
@@ -63,6 +64,16 @@ export const shareFile = async (req, res) => {
       });
     }
 
+    const fileRes = await dynamoDb
+      .get({
+        TableName: FILES_TABLE,
+        Key: { userId, fileId },
+      })
+      .promise();
+    const fileName = fileRes.Item?.fileName || "file";
+
+    await logActivity(ownerEmail, 'SHARE', { fileId, fileName, sharedWith: recipientEmail });
+
     return res.status(201).send({
       message: share.wasUpdated ? "Share updated successfully" : "File shared successfully",
       share,
@@ -80,6 +91,16 @@ export const revokeFileShare = async (req, res) => {
     const { shareId } = validateShareAction(req.body);
 
     const share = await revokeShare({ shareId, ownerId: userId });
+
+    const fileRes = await dynamoDb
+      .get({
+        TableName: FILES_TABLE,
+        Key: { userId, fileId: share.fileId },
+      })
+      .promise();
+    const fileName = fileRes.Item?.fileName || "file";
+
+    await logActivity(req.user.email, 'UNSHARE', { fileId: share.fileId, fileName, revokedFrom: share.recipientEmail });
 
     return res.status(200).send({
       message: "Share revoked successfully",

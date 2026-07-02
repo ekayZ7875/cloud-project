@@ -3,6 +3,7 @@ import { GetCommand, PutCommand, UpdateCommand, DeleteCommand, QueryCommand } fr
 import {asyncHandler} from '../utils/asyncHandler.js'
 import { ApiError } from '../utils/ApiError.js'
 import { generateId } from '../utils/generatedID.js'
+import { logActivity } from '../utils/activityLogger.js'
 
 // @desc    Create a new folder
 // @route   POST /api/folders
@@ -152,6 +153,8 @@ const renameFolder = asyncHandler(async (req, res) => {
     ExpressionAttributeNames: { '#n': 'name' },
     ExpressionAttributeValues: { ':n': name.trim(), ':u': new Date().toISOString() },
   }))
+
+  await logActivity(req.user.email, 'RENAME', { folderId, oldName: folder.name, newName: name.trim() });
 
   res.status(200).json({ success: true, message: 'Folder renamed successfully' })
 })

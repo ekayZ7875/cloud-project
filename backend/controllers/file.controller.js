@@ -10,6 +10,7 @@ import {
 import { canUserAccessFile } from "../services/share.service.js";
 import { DEFAULT_FILE_SIZE_ALLOWED } from "../constants/pipeline.constants.js";
 import { publishFileProcessingJob } from "../services/queue.service.js";
+import { logActivity } from "../utils/activityLogger.js";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -146,6 +147,8 @@ export const uploadFile = async (req, res) => {
         );
     }
 
+    await logActivity(email, 'UPLOAD', { fileId, fileName: file.originalname });
+
     return res.status(200).send({
       message: "File uploaded successfully",
       fileUrl: s3Url,
@@ -230,13 +233,15 @@ export const uploadFolder = async (req, res) => {
       }).promise();
 
       // Trigger Processing Job for each file in folder
-      return createProcessingJob({
+      await createProcessingJob({
         jobId,
         userId,
         fileId,
         fileName: file.originalname,
         s3Url,
       });
+
+      await logActivity(email, 'UPLOAD', { fileId, fileName: file.originalname });
     });
 
     await Promise.all(uploadPromises);
@@ -484,6 +489,8 @@ export const softDeleteFolder = async (req, res) => {
       }
     }).promise();
 
+    await logActivity(req.user.email, 'TRASH', { folderId, fileName: folderRes.Item.name });
+
     return res.status(200).json({ message: "Folder moved to trash" });
   } catch (err) {
     res.status(500).send(errorHandler(500, "Server Error", "Failed to delete folder"));
@@ -494,6 +501,12 @@ export const restoreItem = async (req, res) => {
   try {
     const userId = req.user.userId;
     const { itemId, type } = req.body; // type can be 'file' or 'folder'
+
+    const { Item: trashItem } = await dynamoDb.get({
+      TableName: "ChunklyTrashTable",
+      Key: { userId, ...(type === 'folder' ? { folderId: itemId } : { fileId: itemId }) }
+    }).promise();
+    const itemName = trashItem ? (trashItem.name || trashItem.fileName) : 'Unknown';
 
     if (type === 'folder') {
       await dynamoDb.update({
@@ -516,6 +529,8 @@ export const restoreItem = async (req, res) => {
       TableName: "ChunklyTrashTable",
       Key: { userId, ...(type === 'folder' ? { folderId: itemId } : { fileId: itemId }) }
     }).promise();
+
+    await logActivity(req.user.email, 'RESTORE', { fileId: itemId, fileName: itemName });
 
     return res.status(200).json({ message: "Item restored from vault" });
   } catch (err) {
@@ -547,6 +562,8 @@ export const permanentDelete = async (req, res) => {
       TableName: "ChunklyTrashTable",
       Key: { userId, ...(type === 'folder' ? { folderId: itemId } : { fileId: itemId }) }
     }).promise();
+
+    await logActivity(req.user.email, 'PERMANENT_DELETE', { fileId: itemId, fileName: fileName || (type === 'folder' ? 'folder' : 'file') });
 
     return res.status(200).json({ message: "Item purged from system" });
   } catch (err) {
@@ -654,6 +671,8 @@ export const softDeleteFile = async (req, res) => {
         Item: trashItem,
       })
       .promise();
+
+    await logActivity(user.email, 'TRASH', { fileId, fileName: file.fileName });
 
     return res.status(200).send({
       response: {
@@ -872,6 +891,8 @@ export const downloadFile = async (req, res) => {
     };
 
     const url = await s3.getSignedUrl("getObject", params);
+
+    await logActivity(requesterEmail, 'DOWNLOAD', { fileId, fileName: result.Item.fileName });
 
     return res.status(200).json({
       success: true,

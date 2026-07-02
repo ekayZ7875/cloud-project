@@ -1,25 +1,13 @@
 import { dynamoDb } from '../config/dynamoDb.js'
-import { QueryCommand, GetCommand, DeleteCommand, UpdateCommand, PutCommand } from '@aws-sdk/lib-dynamodb'
+import { QueryCommand, GetCommand, DeleteCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb'
 import { DeleteObjectCommand } from '@aws-sdk/client-s3'
 import s3 from '../config/s3.js'
 import {asyncHandler} from '../utils/asyncHandler.js'
 import { ApiError } from '../utils/ApiError.js'
-import { generateId } from '../utils/generatedID.js'
+import { logActivity } from '../utils/activityLogger.js'
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
-const logActivity = async (userId, type, meta = {}) => {
-  await dynamoDb.send(new PutCommand({
-    TableName: process.env.ACTIVITY_TABLE,
-    Item: {
-      userId,
-      activityId: generateId('activity'),
-      type,
-      ...meta,
-      timestamp: new Date().toISOString(),
-    },
-  }))
-}
 
 // @desc    Get all trashed files for user
 // @route   GET /api/trash
