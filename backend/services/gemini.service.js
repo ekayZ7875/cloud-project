@@ -386,7 +386,10 @@ async function generateStructuredJsonText(model, prompt) {
       },
     });
 
-    return result?.response?.text?.() || "";
+    return {
+      text: result?.response?.text?.() || "",
+      usageMetadata: result?.response?.usageMetadata || null,
+    };
   } catch (error) {
     if (
       String(error?.message || "")
@@ -394,7 +397,10 @@ async function generateStructuredJsonText(model, prompt) {
         .includes("responsemimetype")
     ) {
       const result = await model.generateContent(prompt);
-      return result?.response?.text?.() || "";
+      return {
+        text: result?.response?.text?.() || "",
+        usageMetadata: result?.response?.usageMetadata || null,
+      };
     }
 
     throw error;
@@ -442,13 +448,14 @@ async function analyzeDocumentRawWithGemini(documentText) {
     const model = client.getGenerativeModel({ model: modelName });
 
     try {
-      const responseText = await generateStructuredJsonText(model, prompt);
-      const parsed = parseJsonFromModelText(responseText);
+      const responseObj = await generateStructuredJsonText(model, prompt);
+      const parsed = parseJsonFromModelText(responseObj.text);
       const validated = validateFileUnderstandingPayload(parsed);
 
       return {
         ...validated,
         embedding_chunks: buildReliableEmbeddingChunks(documentText, validated.embedding_chunks),
+        tokensUsed: responseObj.usageMetadata?.totalTokenCount || 0,
       };
     } catch (error) {
       lastModelError = error;
@@ -632,12 +639,16 @@ async function generateAssistantTextWithGemini(prompt) {
     try {
       const result = await model.generateContent(prompt);
       const text = result?.response?.text?.() || "";
+      const usageMetadata = result?.response?.usageMetadata || null;
 
       if (isBlank(text)) {
         throw new InvalidLlmJsonError("Gemini assistant response was empty");
       }
 
-      return text;
+      return {
+        text,
+        tokensUsed: usageMetadata?.totalTokenCount || 0,
+      };
     } catch (error) {
       lastModelError = error;
 

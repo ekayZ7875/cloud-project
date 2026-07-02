@@ -4,6 +4,7 @@ import { generateKnowledgeAssistantResponse } from "../services/ai.service.js";
 import { buildSmartInsights } from "../services/insights.service.js";
 import { getProcessingJob } from "../services/metadata.service.js";
 import { PIPELINE_STATUS } from "../constants/pipeline.constants.js";
+import { incrementUserTokens } from "../utils/usageTracker.js";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -88,7 +89,12 @@ export const handleAiQuery = async (req, res) => {
     }, {});
 
     // 2. Query the Knowledge Assistant
-    const answer = await generateKnowledgeAssistantResponse(query, fileIds, fileMappings);
+    const { answer, tokensUsed } = await generateKnowledgeAssistantResponse(query, fileIds, fileMappings);
+
+    // Track token usage
+    if (user && user.email) {
+      await incrementUserTokens(user.email, tokensUsed, true);
+    }
 
     // 3. Return the response
     return res.status(200).json({

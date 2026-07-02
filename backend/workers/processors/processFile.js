@@ -10,6 +10,7 @@ import {
   markProcessingPendingRetry,
 } from "../../services/metadata.service.js";
 import { RETRY_POLICY, PIPELINE_STATUS } from "../../constants/pipeline.constants.js";
+import { incrementUserTokens } from "../../utils/usageTracker.js";
 
 const STAGE_TIMEOUT_MS = Number(process.env.FILE_STAGE_TIMEOUT_MS || 180000);
 const EXTRACT_TEXT_TIMEOUT_MS = Number(
@@ -54,7 +55,7 @@ function normalizeError(error) {
 }
 
 export async function processFile(jobMessage) {
-  const { jobId, fileId, userId, s3Url } = jobMessage;
+  const { jobId, fileId, userId, email, s3Url } = jobMessage;
   const attempt = Number(jobMessage.attempt || 1);
   const startTime = Date.now();
 
@@ -96,6 +97,11 @@ export async function processFile(jobMessage) {
     logger.info(
       `[PIPELINE] job=${jobId} stage=analyzeDocument done chunks=${analyzed.embedding_chunks.length}`
     );
+
+    // Track token usage for this file understanding analysis
+    if (email && analyzed.tokensUsed) {
+      await incrementUserTokens(email, analyzed.tokensUsed, false);
+    }
 
     const textsToEmbed = analyzed.embedding_chunks.map((chunk) => chunk.text);
     

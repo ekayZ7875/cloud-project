@@ -85,6 +85,28 @@ const getStorageStats = asyncHandler(async (req, res) => {
     }))
     .sort((a, b) => b.bytes - a.bytes)
 
+  const tokensUsed = user?.tokensUsed || 0
+  const tokenLimit = user?.tokenLimit || 1000000
+  const queriesCount = user?.queriesCount || 0
+
+  // Billing estimation
+  // S3 storage rate: $0.023 per GB per month
+  const s3GbUsed = totalUsed / (1024 * 1024 * 1024)
+  const s3Cost = s3GbUsed * 0.023
+
+  // Gemini rate: ~$3.50 per 1M tokens (average of input and output)
+  const tokenCost = (tokensUsed / 1000000) * 3.50
+
+  // Vector DB embeddings & indexing costs (estimated)
+  const embeddingCost = allFiles.length * 0.0001
+
+  const totalBill = s3Cost + tokenCost + embeddingCost
+
+  // Monthly uploads count
+  const thirtyDaysAgo = new Date()
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+  const uploadsThisMonth = allFiles.filter(f => f.uploadedAt && new Date(f.uploadedAt) >= thirtyDaysAgo).length
+
   res.status(200).json({
     success: true,
     storage: {
@@ -101,6 +123,21 @@ const getStorageStats = asyncHandler(async (req, res) => {
       },
       byType,
     },
+    usage: {
+      tokensUsed,
+      tokenLimit,
+      remainingTokens: Math.max(0, tokenLimit - tokensUsed),
+      tokenPercentage: Math.min(Math.round((tokensUsed / tokenLimit) * 100), 100),
+      queriesCount,
+      uploadsThisMonth,
+      estimatedBill: {
+        s3Cost: Number(s3Cost.toFixed(6)),
+        tokenCost: Number(tokenCost.toFixed(6)),
+        embeddingCost: Number(embeddingCost.toFixed(6)),
+        total: Number(totalBill.toFixed(4)),
+        currency: "USD",
+      }
+    }
   })
 })
 

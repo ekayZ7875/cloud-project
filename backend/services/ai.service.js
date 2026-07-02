@@ -77,5 +77,9 @@ export async function generateKnowledgeAssistantResponse(query, fileIds = [], fi
   const prompt = buildPrompt(query, contextData);
 
   // 5. Generate final response using the active LLM provider.
-  return generateAssistantText(prompt);
+  const response = await generateAssistantText(prompt);
+  return {
+    answer: response.text,
+    tokensUsed: response.tokensUsed,
+  };
 }

@@ -1,3 +1,4 @@
+import http from "http";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -16,6 +17,7 @@ import searchRoutes from "./routes/search.routes.js";
 import storageRoutes from "./routes/storage.routes.js";
 import trashRoutes from "./routes/trash.routes.js";
 import healthRoutes from "./routes/health.routes.js";
+import dashboardRoutes from "./routes/dashboard.routes.js";
 import swaggerUi from "swagger-ui-express";
 import { openApiSpec } from "./docs/openapi.js";
 import logger from "./libs/logger.js";
@@ -56,6 +58,7 @@ app.use("/api/activity", activityRoutes);
 app.use("/api/search", searchRoutes);
 app.use("/api/storage", storageRoutes);
 app.use("/api/trash", trashRoutes);
+app.use("/api/dashboard", dashboardRoutes);
 app.use("/health", healthRoutes);
 app.use("/api/health", healthRoutes);
 
@@ -73,7 +76,8 @@ app.use(errorMiddleware);
 // ─── Graceful Shutdown ────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, () =>
+const server = http.createServer(app);
+server.listen(PORT, () =>
   logger.info(`Server running on port ${PORT}`)
 );
 

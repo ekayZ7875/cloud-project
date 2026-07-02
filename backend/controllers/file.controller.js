@@ -123,6 +123,7 @@ export const uploadFile = async (req, res) => {
         jobId,
         fileId,
         userId,
+        email,
         s3Url,
         attempt: 1,
         uploadedAt: new Date().toISOString(),
@@ -240,6 +241,26 @@ export const uploadFolder = async (req, res) => {
         fileName: file.originalname,
         s3Url,
       });
+
+      try {
+        await publishFileProcessingJob({
+          jobId,
+          fileId,
+          userId,
+          email,
+          s3Url,
+          attempt: 1,
+          uploadedAt: new Date().toISOString(),
+        });
+      } catch (queueError) {
+        console.error("Queue folder upload item failed:", queueError);
+        await markProcessingFailed({
+          userId,
+          jobId,
+          attempt: 1,
+          errorMessage: `QUEUE_PUBLISH_FAILED: ${queueError.message}`,
+        });
+      }
 
       await logActivity(email, 'UPLOAD', { fileId, fileName: file.originalname });
     });
