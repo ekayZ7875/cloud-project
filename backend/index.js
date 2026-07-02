@@ -29,9 +29,20 @@ const app = express();
 
 // ─── Core Middleware ──────────────────────────────────────────────────────────
 
+const allowedOrigins = process.env.CLIENT_URL
+  ? process.env.CLIENT_URL.split(",").map((url) => url.trim())
+  : [];
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL, // set this in .env (see .env.example)
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin) || origin === "http://localhost:5173" || origin === "http://localhost:3000") {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,              // required for httpOnly cookies cross-origin
     methods: "GET,POST,PUT,DELETE",
   })
